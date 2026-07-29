@@ -49,19 +49,23 @@ Cox = Cox_nf * 1e-9
 
 st.sidebar.markdown("---")
 st.sidebar.header("Smoothing Settings")
-apply_smoothing = st.sidebar.checkbox("Apply smoothing", value=True)
+apply_smoothing = st.sidebar.checkbox("Remove upward spikes + Apply smoothing", value=False)
 smooth_center = st.sidebar.number_input("Center Vg (V)", value=0.0, step=0.5)
 smooth_half_width = st.sidebar.number_input("Range (±V)", min_value=0.0, value=5.0, step=0.5)
 smooth_kernel = st.sidebar.slider("Spike detection window", 3, 21, 5, 2)
-smooth_z = st.sidebar.slider("Spike threshold", 2.0, 12.0, 5.0, 0.5)
+smooth_z = st.sidebar.slider("Upward spike threshold", 2.0, 12.0, 4.0, 0.5, help="작을수록 위로 튀는 점을 더 강하게 제거합니다.")
 smooth_use_savgol = st.sidebar.checkbox("Savitzky–Golay smoothing", value=True)
 smooth_window = st.sidebar.slider("S-G window", 3, 31, 7, 2)
 smooth_polyorder = st.sidebar.slider("S-G polynomial order", 1, 4, 2)
 smooth_log_domain = st.sidebar.checkbox("Smooth in log(|Id|) domain", value=True)
 
 
-def robust_local_spike_mask(y, kernel_size=5, z_threshold=5.0):
-    """Median/MAD 기반 국소 spike 검출."""
+def robust_local_spike_mask(y, kernel_size=5, z_threshold=4.0):
+    """
+    국소 median/MAD 기준으로 '위쪽으로만' 비정상적으로 솟는 spike를 검출.
+    아래쪽 dip은 제거하지 않으며, 정상적인 turn-on 곡선은 국소 median과
+    양쪽 이웃 추세를 함께 비교해 과도한 단일/소수 점만 제거한다.
+    """
     y = np.asarray(y, dtype=float)
     valid = np.isfinite(y)
     result = np.zeros(len(y), dtype=bool)
@@ -82,15 +86,29 @@ def robust_local_spike_mask(y, kernel_size=5, z_threshold=5.0):
 
     local_median = median_filter(work, size=kernel_size, mode="nearest")
     residual = work - local_median
+
+    # 양의 residual만 이용해 robust noise scale 산출
     med = np.median(residual)
     mad = np.median(np.abs(residual - med))
     robust_sigma = 1.4826 * mad
-
     if not np.isfinite(robust_sigma) or robust_sigma == 0:
-        scale = np.nanmedian(np.abs(work))
-        robust_sigma = max(scale * 1e-6, np.finfo(float).eps)
+        diffs = np.diff(work)
+        diff_mad = np.median(np.abs(diffs - np.median(diffs))) if len(diffs) else 0.0
+        robust_sigma = max(1.4826 * diff_mad, np.finfo(float).eps)
 
-    return (np.abs(residual - med) > z_threshold * robust_sigma) & valid
+    candidate = residual > (med + z_threshold * robust_sigma)
+
+    # 양쪽 이웃을 잇는 예상값보다도 확실히 위에 있는 점만 유지
+    neighbor_expected = local_median.copy()
+    if len(work) >= 3:
+        neighbor_expected[1:-1] = 0.5 * (work[:-2] + work[2:])
+    neighbor_excess = work - neighbor_expected
+    candidate &= neighbor_excess > max(robust_sigma * z_threshold * 0.5, np.finfo(float).eps)
+
+    # sweep 끝점은 peak 판정을 왜곡할 가능성이 커서 자동 제거 대상에서 제외
+    candidate[:1] = False
+    candidate[-1:] = False
+    return candidate & valid
 
 
 def interpolate_masked_by_index(y, mask):
@@ -224,87 +242,148 @@ def extract_parameters_from_sheet(df, file_id, sheet_name, w, l, cox, mode):
         spike_fwd = np.zeros(len(id_fwd_original), dtype=bool)
         spike_bwd = np.zeros(len(id_bwd_original), dtype=bool)
 
-    id_fwd = pd.Series(id_fwd_smooth_arr)
-    id_bwd = pd.Series(id_bwd_smooth_arr)
+    id_fwd_smooth = pd.Series(id_fwd_smooth_arr)
+    id_bwd_smooth = pd.Series(id_bwd_smooth_arr)
 
     def calc_curves(vg_part, id_part):
+        vals = np.asarray(id_part, dtype=float)
         if mode == "Linear":
-            gm = fix_inf(np.gradient(id_part.values, vg_part.values))
+            gm = fix_inf(np.gradient(vals, vg_part.values))
             mobility = (np.abs(gm) * l) / (w * cox * abs(vd))
         else:
-            sqrt_id = np.sqrt(np.abs(id_part.values))
+            sqrt_id = np.sqrt(np.abs(vals))
             gm = fix_inf(np.gradient(sqrt_id, vg_part.values))
             mobility = (2 * l / (w * cox)) * (gm ** 2)
         return gm, mobility
 
     gm_fwd_raw, mobility_fwd_raw = calc_curves(vg_fwd, id_fwd_original)
     gm_bwd_raw, mobility_bwd_raw = calc_curves(vg_bwd, id_bwd_original)
-    gm_fwd_smooth, mobility_fwd_smooth = calc_curves(vg_fwd, id_fwd)
-    gm_bwd_smooth, mobility_bwd_smooth = calc_curves(vg_bwd, id_bwd)
+    gm_fwd_smooth, mobility_fwd_smooth = calc_curves(vg_fwd, id_fwd_smooth)
+    gm_bwd_smooth, mobility_bwd_smooth = calc_curves(vg_bwd, id_bwd_smooth)
 
-    # 파라미터 추출에는 smoothed curve 사용
     key_fwd = f"val_fwd_{file_id}_{sheet_name}_{mode}"
     key_bwd = f"val_bwd_{file_id}_{sheet_name}_{mode}"
+
+    auto_gm_f = np.abs(gm_fwd_smooth if apply_smoothing else gm_fwd_raw)
+    auto_gm_b = np.abs(gm_bwd_smooth if apply_smoothing else gm_bwd_raw)
 
     if key_fwd in st.session_state:
         target_vg_fwd = st.session_state[key_fwd]
     else:
-        abs_gm_f = np.abs(gm_fwd_smooth)
-        idx_f_auto = np.argmax(abs_gm_f[2:-2]) + 2 if len(abs_gm_f) > 5 else np.argmax(abs_gm_f)
+        idx_f_auto = np.argmax(auto_gm_f[2:-2]) + 2 if len(auto_gm_f) > 5 else np.argmax(auto_gm_f)
         target_vg_fwd = float(vg_fwd.iloc[idx_f_auto])
 
     if key_bwd in st.session_state:
         target_vg_bwd = st.session_state[key_bwd]
     else:
-        abs_gm_b = np.abs(gm_bwd_smooth)
-        idx_b_auto = np.argmax(abs_gm_b[2:-2]) + 2 if len(abs_gm_b) > 5 else np.argmax(abs_gm_b)
+        idx_b_auto = np.argmax(auto_gm_b[2:-2]) + 2 if len(auto_gm_b) > 5 else np.argmax(auto_gm_b)
         target_vg_bwd = float(vg_bwd.iloc[idx_b_auto])
 
-    vg_max_gm_fwd = float(vg_fwd.loc[(vg_fwd - target_vg_fwd).abs().idxmin()])
-    vg_max_gm_bwd = float(vg_bwd.loc[(vg_bwd - target_vg_bwd).abs().idxmin()])
-    idx_f = int(vg_fwd[vg_fwd == vg_max_gm_fwd].index[0])
-    idx_b = int(vg_bwd[vg_bwd == vg_max_gm_bwd].index[0])
+    vg_pick_fwd = float(vg_fwd.loc[(vg_fwd - target_vg_fwd).abs().idxmin()])
+    vg_pick_bwd = float(vg_bwd.loc[(vg_bwd - target_vg_bwd).abs().idxmin()])
+    idx_f = int(vg_fwd[vg_fwd == vg_pick_fwd].index[0])
+    idx_b = int(vg_bwd[vg_bwd == vg_pick_bwd].index[0])
 
-    if mode == "Linear":
-        vth_fwd = -id_fwd.iloc[idx_f] / gm_fwd_smooth[idx_f] + vg_max_gm_fwd
-        vth_bwd = -id_bwd.iloc[idx_b] / gm_bwd_smooth[idx_b] + vg_max_gm_bwd
-    else:
-        vth_fwd = -np.sqrt(abs(id_fwd.iloc[idx_f])) / gm_fwd_smooth[idx_f] + vg_max_gm_fwd
-        vth_bwd = -np.sqrt(abs(id_bwd.iloc[idx_b])) / gm_bwd_smooth[idx_b] + vg_max_gm_bwd
+    def parameter_set(id_fwd, id_bwd, gm_fwd, gm_bwd, mu_fwd_curve, mu_bwd_curve):
+        id_fwd = pd.Series(np.asarray(id_fwd, dtype=float))
+        id_bwd = pd.Series(np.asarray(id_bwd, dtype=float))
 
-    peak_mu_fwd = mobility_fwd_smooth[idx_f]
-    peak_mu_bwd = mobility_bwd_smooth[idx_b]
-    hysteresis = abs(vth_fwd - vth_bwd)
+        def safe_vth(id_value, gm_value, vg_value, saturation=False):
+            if not np.isfinite(gm_value) or abs(gm_value) <= np.finfo(float).eps:
+                return np.nan
+            numerator = np.sqrt(abs(id_value)) if saturation else id_value
+            return float(-numerator / gm_value + vg_value)
 
-    # ON/OFF ratio와 ON/OFF current density는 동일한 smoothed |Id| 값 사용
-    id_full_smooth = np.concatenate([id_fwd.values, id_bwd.values[1:]])
-    finite_abs = np.abs(id_full_smooth[np.isfinite(id_full_smooth)])
-    positive_abs = finite_abs[finite_abs > 0]
-    on_current = float(np.max(finite_abs)) if len(finite_abs) else np.nan
-    off_current = float(np.min(positive_abs)) if len(positive_abs) else np.nan
-    onoff_ratio = on_current / off_current if np.isfinite(off_current) and off_current > 0 else np.nan
-    on_current_density = on_current / w if w > 0 else np.nan
-    off_current_density = off_current / w if w > 0 else np.nan
+        vth_f = safe_vth(id_fwd.iloc[idx_f], gm_fwd[idx_f], vg_pick_fwd, mode == "Saturation")
+        vth_b = safe_vth(id_bwd.iloc[idx_b], gm_bwd[idx_b], vg_pick_bwd, mode == "Saturation")
 
-    ss_fwd = calculate_ss(id_fwd.values, vg_fwd.values)
-    ss_bwd = calculate_ss(id_bwd.values, vg_bwd.values)
+        full_current = np.concatenate([id_fwd.values, id_bwd.values[1:]])
+        finite_abs = np.abs(full_current[np.isfinite(full_current)])
+        positive_abs = finite_abs[finite_abs > 0]
+        on_current = float(np.max(finite_abs)) if len(finite_abs) else np.nan
+        off_current = float(np.min(positive_abs)) if len(positive_abs) else np.nan
+
+        return {
+            "mu_fwd": float(mu_fwd_curve[idx_f]),
+            "mu_bwd": float(mu_bwd_curve[idx_b]),
+            "vth_fwd": vth_f,
+            "vth_bwd": vth_b,
+            "gm_max_fwd": vg_pick_fwd,
+            "gm_max_bwd": vg_pick_bwd,
+            "ss_fwd": calculate_ss(id_fwd.values, vg_fwd.values),
+            "ss_bwd": calculate_ss(id_bwd.values, vg_bwd.values),
+            "hysteresis": abs(vth_f - vth_b) if np.isfinite(vth_f) and np.isfinite(vth_b) else np.nan,
+            "on_current": on_current,
+            "off_current": off_current,
+            "onoff": on_current / off_current if np.isfinite(off_current) and off_current > 0 else np.nan,
+            "on_current_density": on_current / w if np.isfinite(on_current) else np.nan,
+            "off_current_density": off_current / w if np.isfinite(off_current) else np.nan,
+        }
+
+    raw_params = parameter_set(
+        id_fwd_original, id_bwd_original,
+        gm_fwd_raw, gm_bwd_raw,
+        mobility_fwd_raw, mobility_bwd_raw,
+    )
+    smooth_params = parameter_set(
+        id_fwd_smooth, id_bwd_smooth,
+        gm_fwd_smooth, gm_bwd_smooth,
+        mobility_fwd_smooth, mobility_bwd_smooth,
+    )
 
     return {
-        'mu_fwd': peak_mu_fwd, 'vth_fwd': vth_fwd, 'gm_max_fwd': vg_max_gm_fwd, 'ss_fwd': ss_fwd,
-        'mu_bwd': peak_mu_bwd, 'vth_bwd': vth_bwd, 'gm_max_bwd': vg_max_gm_bwd, 'ss_bwd': ss_bwd,
-        'onoff': onoff_ratio, 'on_current': on_current, 'off_current': off_current,
-        'on_current_density': on_current_density, 'off_current_density': off_current_density,
-        'hysteresis': hysteresis,
-        'vg_fwd': vg_fwd, 'id_fwd': id_fwd, 'id_fwd_original': id_fwd_original,
-        'gm_fwd_raw': gm_fwd_raw, 'gm_fwd_smooth': gm_fwd_smooth,
-        'mobility_fwd_raw': mobility_fwd_raw, 'mobility_fwd_smooth': mobility_fwd_smooth,
-        'spike_fwd': spike_fwd,
-        'vg_bwd': vg_bwd, 'id_bwd': id_bwd, 'id_bwd_original': id_bwd_original,
-        'gm_bwd_raw': gm_bwd_raw, 'gm_bwd_smooth': gm_bwd_smooth,
-        'mobility_bwd_raw': mobility_bwd_raw, 'mobility_bwd_smooth': mobility_bwd_smooth,
-        'spike_bwd': spike_bwd,
-        'vg_full': vg, 'vd': vd
+        "raw": raw_params,
+        "smooth": smooth_params,
+        "vg_fwd": vg_fwd,
+        "vg_bwd": vg_bwd,
+        "id_fwd_original": id_fwd_original,
+        "id_bwd_original": id_bwd_original,
+        "id_fwd_smooth": id_fwd_smooth,
+        "id_bwd_smooth": id_bwd_smooth,
+        "gm_fwd_raw": gm_fwd_raw,
+        "gm_bwd_raw": gm_bwd_raw,
+        "gm_fwd_smooth": gm_fwd_smooth,
+        "gm_bwd_smooth": gm_bwd_smooth,
+        "mobility_fwd_raw": mobility_fwd_raw,
+        "mobility_bwd_raw": mobility_bwd_raw,
+        "mobility_fwd_smooth": mobility_fwd_smooth,
+        "mobility_bwd_smooth": mobility_bwd_smooth,
+        "spike_fwd": spike_fwd,
+        "spike_bwd": spike_bwd,
+        "vg_full": vg,
+        "vd": vd,
     }
+
+
+def sci(value, digits=2):
+    if not np.isfinite(value) or value <= 0:
+        return "N/A"
+    exp = int(np.floor(np.log10(value)))
+    coef = value / (10 ** exp)
+    return f"{coef:.{digits}f}E{exp}"
+
+
+def parameter_table(raw, smooth=None):
+    rows = [
+        ("Forward peak mobility (cm²/V·s)", raw["mu_fwd"], smooth["mu_fwd"] if smooth else None),
+        ("Forward Vth (V)", raw["vth_fwd"], smooth["vth_fwd"] if smooth else None),
+        ("Forward SS (mV/dec)", raw["ss_fwd"], smooth["ss_fwd"] if smooth else None),
+        ("Backward peak mobility (cm²/V·s)", raw["mu_bwd"], smooth["mu_bwd"] if smooth else None),
+        ("Backward Vth (V)", raw["vth_bwd"], smooth["vth_bwd"] if smooth else None),
+        ("Backward SS (mV/dec)", raw["ss_bwd"], smooth["ss_bwd"] if smooth else None),
+        ("Hysteresis (V)", raw["hysteresis"], smooth["hysteresis"] if smooth else None),
+        ("ON/OFF ratio", raw["onoff"], smooth["onoff"] if smooth else None),
+        ("ON current / Width (A/μm)", raw["on_current_density"], smooth["on_current_density"] if smooth else None),
+        ("OFF current / Width (A/μm)", raw["off_current_density"], smooth["off_current_density"] if smooth else None),
+    ]
+    data = {"Parameter": [r[0] for r in rows], "Raw": [r[1] for r in rows]}
+    if smooth is not None:
+        data["After spike removal + smoothing"] = [r[2] for r in rows]
+        data["Change"] = [
+            (r[2] - r[1]) if np.isfinite(r[1]) and np.isfinite(r[2]) else np.nan
+            for r in rows
+        ]
+    return pd.DataFrame(data)
 
 # 3. 파일 업로드
 uploaded_file = st.file_uploader("측정된 엑셀 파일을 업로드하세요", type=["xlsx", "xls"])
@@ -356,51 +435,51 @@ if uploaded_file:
         # =====================================================================
         if selected_sheet == "Average (All Sheets)":
             st.markdown(f"<h3 style='color: #333;'>📊 Statistics ({operating_mode} - Average of {len(target_sheets)} sheets)</h3>", unsafe_allow_html=True)
-            st.info("해당 값은 각 시트에서 추출된(수정된 Vg 포인트가 반영된) 파라미터의 평균(± 표준편차)입니다.")
-            
-            results = []
+
+            rows = []
             for sheet in target_sheets:
                 df = pd.read_excel(uploaded_file, sheet_name=sheet)
                 if 'GateV' in df.columns and 'DrainI' in df.columns:
-                    res = extract_parameters_from_sheet(df, file_id, sheet, W, L, Cox, operating_mode)
-                    results.append(res)
-                    
-            if not results:
+                    res_sheet = extract_parameters_from_sheet(df, file_id, sheet, W, L, Cox, operating_mode)
+                    row = {"sheet": sheet}
+                    row.update({f"raw_{k}": v for k, v in res_sheet["raw"].items()})
+                    row.update({f"smooth_{k}": v for k, v in res_sheet["smooth"].items()})
+                    row["removed_spikes"] = int(np.sum(res_sheet["spike_fwd"]) + np.sum(res_sheet["spike_bwd"]))
+                    rows.append(row)
+
+            if not rows:
                 st.error("유효한 데이터가 있는 시트가 없습니다.")
             else:
-                df_res = pd.DataFrame(results)
-                
-                def format_stat(col, unit, is_log=False):
-                    mean_val = df_res[col].mean()
-                    std_val = df_res[col].std()
-                    if is_log:
-                        exp = int(np.floor(np.log10(mean_val)))
-                        coef = mean_val / (10 ** exp)
-                        return f"{coef:.2f}E{exp}" 
-                    
-                    if not np.isfinite(mean_val): return "N/A"
-                    return f"{mean_val:.2f} ± {std_val:.2f} {unit}"
-                
-                st.markdown("<h4 style='color: #6FADCF;'>Forward Sweep Parameters (Avg)</h4>", unsafe_allow_html=True)
-                f1, f2, f3, f4 = st.columns(4)
-                f1.markdown(make_card(f"{operating_mode} Mobility (@ Peak)", format_stat('mu_fwd', 'cm²/V·s'), "#2E60AB"), unsafe_allow_html=True)
-                f2.markdown(make_card("Threshold Voltage (Vₜₕ)", format_stat('vth_fwd', 'V'), "#A23B72"), unsafe_allow_html=True)
-                f3.markdown(make_card("Peak Point (Vg)", format_stat('gm_max_fwd', 'V'), "#F18F01"), unsafe_allow_html=True)
-                f4.markdown(make_card("SS (Subthreshold Swing)", format_stat('ss_fwd', 'mV/dec'), "#18A558"), unsafe_allow_html=True)
+                stat_df = pd.DataFrame(rows)
+                keys = [
+                    ("mu_fwd", "Forward peak mobility"),
+                    ("vth_fwd", "Forward Vth"),
+                    ("ss_fwd", "Forward SS"),
+                    ("mu_bwd", "Backward peak mobility"),
+                    ("vth_bwd", "Backward Vth"),
+                    ("ss_bwd", "Backward SS"),
+                    ("hysteresis", "Hysteresis"),
+                    ("onoff", "ON/OFF ratio"),
+                    ("on_current_density", "ON current / Width (A/μm)"),
+                    ("off_current_density", "OFF current / Width (A/μm)"),
+                ]
+                summary = []
+                for key, label in keys:
+                    item = {
+                        "Parameter": label,
+                        "Raw mean": stat_df[f"raw_{key}"].mean(),
+                        "Raw std": stat_df[f"raw_{key}"].std(),
+                    }
+                    if apply_smoothing:
+                        item["Smoothed mean"] = stat_df[f"smooth_{key}"].mean()
+                        item["Smoothed std"] = stat_df[f"smooth_{key}"].std()
+                    summary.append(item)
 
-                st.markdown("<h4 style='color: #F05650; margin-top: 20px;'>Backward Sweep Parameters (Avg)</h4>", unsafe_allow_html=True)
-                b1, b2, b3, b4 = st.columns(4)
-                b1.markdown(make_card(f"{operating_mode} Mobility (@ Peak)", format_stat('mu_bwd', 'cm²/V·s'), "#2E60AB"), unsafe_allow_html=True)
-                b2.markdown(make_card("Threshold Voltage (Vₜₕ)", format_stat('vth_bwd', 'V'), "#A23B72"), unsafe_allow_html=True)
-                b3.markdown(make_card("Peak Point (Vg)", format_stat('gm_max_bwd', 'V'), "#F18F01"), unsafe_allow_html=True)
-                b4.markdown(make_card("SS (Subthreshold Swing)", format_stat('ss_bwd', 'mV/dec'), "#18A558"), unsafe_allow_html=True)
-                
-                st.markdown("<h4 style='margin-top: 20px;'>Overall Device Parameters (Avg)</h4>", unsafe_allow_html=True)
-                o1, o2, o3, o4 = st.columns(4)
-                o1.markdown(make_card("On/Off Ratio (Mean)", format_stat('onoff', '', is_log=True), "#5B5F97"), unsafe_allow_html=True)
-                o2.markdown(make_card("ON Current / Width", format_stat('on_current_density', 'A/μm'), "#5B5F97"), unsafe_allow_html=True)
-                o3.markdown(make_card("OFF Current / Width", format_stat('off_current_density', 'A/μm'), "#5B5F97"), unsafe_allow_html=True)
-                o4.markdown(make_card("Hysteresis", format_stat('hysteresis', 'V'), "#5B5F97"), unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+                if apply_smoothing:
+                    st.success(f"전체 시트에서 upward spike 총 {int(stat_df['removed_spikes'].sum())}개 제거 후 모든 parameter를 재계산했습니다.")
+                else:
+                    st.info("Smoothing을 체크하면 Raw 평균과 Smoothed 평균이 함께 표시됩니다.")
                 st.markdown("---")
 
         # =====================================================================
@@ -414,8 +493,8 @@ if uploaded_file:
                 # ✅ 함수 호출 결과 받기
                 res = extract_parameters_from_sheet(df, file_id, selected_sheet, W, L, Cox, operating_mode)
                 
-                vg_fwd, id_fwd = res['vg_fwd'], res['id_fwd']
-                vg_bwd, id_bwd = res['vg_bwd'], res['id_bwd']
+                vg_fwd, vg_bwd = res['vg_fwd'], res['vg_bwd']
+                id_fwd, id_bwd = res['id_fwd_smooth'], res['id_bwd_smooth']
                 id_fwd_original, id_bwd_original = res['id_fwd_original'], res['id_bwd_original']
                 gm_fwd_raw, gm_fwd_smooth = res['gm_fwd_raw'], res['gm_fwd_smooth']
                 gm_bwd_raw, gm_bwd_smooth = res['gm_bwd_raw'], res['gm_bwd_smooth']
@@ -521,42 +600,49 @@ if uploaded_file:
                 )
 
                 # UI 출력값 구성
-                vg_max_gm_fwd = res['gm_max_fwd']
-                vg_max_gm_bwd = res['gm_max_bwd']
-                
-                ss_fwd_display = f"{res['ss_fwd']:.1f} mV/dec" if np.isfinite(res['ss_fwd']) else "N/A"
-                ss_bwd_display = f"{res['ss_bwd']:.1f} mV/dec" if np.isfinite(res['ss_bwd']) else "N/A"
-                
-                if np.isfinite(res['onoff']) and res['onoff'] > 0:
-                    exponent = int(np.floor(np.log10(res['onoff'])))
-                    coefficient = res['onoff'] / (10 ** exponent)
-                    onoff_str = f"{coefficient:.2f}E{exponent}"
-                else:
-                    onoff_str = "N/A"
-                
-                st.markdown(f"<h3 style='color: #333;'>📊 Data Sheet: {selected_sheet} ({operating_mode} Mode)</h3>", unsafe_allow_html=True)
-                
-                st.markdown("<h4 style='color: #6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
-                f1, f2, f3, f4 = st.columns(4)
-                f1.markdown(make_card("Peak Mobility", f"{res['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-                f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{res['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-                f3.markdown(make_card("Peak Point (Vg)", f"{vg_max_gm_fwd:.1f} V", "#F18F01"), unsafe_allow_html=True)
-                f4.markdown(make_card("SS (Subthreshold Swing)", ss_fwd_display, "#18A558"), unsafe_allow_html=True)
+                raw_p = res["raw"]
+                smooth_p = res["smooth"]
+                active_p = smooth_p if apply_smoothing else raw_p
+                vg_max_gm_fwd = active_p["gm_max_fwd"]
+                vg_max_gm_bwd = active_p["gm_max_bwd"]
 
-                st.markdown("<h4 style='color: #F05650; margin-top: 20px;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
-                b1, b2, b3, b4 = st.columns(4)
-                b1.markdown(make_card("Peak Mobility", f"{res['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-                b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{res['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-                b3.markdown(make_card("Peak Point (Vg)", f"{vg_max_gm_bwd:.1f} V", "#F18F01"), unsafe_allow_html=True)
-                b4.markdown(make_card("SS (Subthreshold Swing)", ss_bwd_display, "#18A558"), unsafe_allow_html=True)
-                
-                st.markdown("<h4 style='margin-top: 20px;'>Overall Device Parameters</h4>", unsafe_allow_html=True)
-                o1, o2, o3, o4 = st.columns(4)
-                o1.markdown(make_card("On/Off Ratio", onoff_str, "#5B5F97"), unsafe_allow_html=True)
-                o2.markdown(make_card("ON Current / Width", f"{res['on_current_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
-                o3.markdown(make_card("OFF Current / Width", f"{res['off_current_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
-                o4.markdown(make_card("Hysteresis (Based on Vₜₕ)", f"{res['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
-                st.caption("ON/OFF ratio, ON current density, OFF current density는 모두 smoothed |DrainI|의 동일한 최대·최소값을 사용합니다.")
+                st.markdown(f"<h3 style='color: #333;'>📊 Data Sheet: {selected_sheet} ({operating_mode} Mode)</h3>", unsafe_allow_html=True)
+
+                st.markdown("<h4>Raw Parameters</h4>", unsafe_allow_html=True)
+                st.dataframe(parameter_table(raw_p), use_container_width=True, hide_index=True)
+
+                if apply_smoothing:
+                    removed_total = int(np.sum(res["spike_fwd"]) + np.sum(res["spike_bwd"]))
+                    st.success(
+                        f"Upward spike {removed_total}개를 제거한 뒤 smoothing을 적용했습니다. "
+                        "아래 값은 보정된 DrainI로 gm, mobility, Vth, SS, hysteresis, ON/OFF를 모두 다시 계산한 결과입니다."
+                    )
+                    st.markdown("<h4 style='color:#2E60AB;'>Raw vs Smoothed Parameters</h4>", unsafe_allow_html=True)
+                    st.dataframe(parameter_table(raw_p, smooth_p), use_container_width=True, hide_index=True)
+
+                    st.markdown("<h4 style='color:#6FADCF;'>Forward Sweep — Smoothed</h4>", unsafe_allow_html=True)
+                    f1, f2, f3, f4 = st.columns(4)
+                    f1.markdown(make_card("Peak Mobility", f"{smooth_p['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+                    f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{smooth_p['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+                    f3.markdown(make_card("Peak Point (Vg)", f"{smooth_p['gm_max_fwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
+                    f4.markdown(make_card("SS", f"{smooth_p['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+
+                    st.markdown("<h4 style='color:#F05650;'>Backward Sweep — Smoothed</h4>", unsafe_allow_html=True)
+                    b1, b2, b3, b4 = st.columns(4)
+                    b1.markdown(make_card("Peak Mobility", f"{smooth_p['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+                    b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{smooth_p['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+                    b3.markdown(make_card("Peak Point (Vg)", f"{smooth_p['gm_max_bwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
+                    b4.markdown(make_card("SS", f"{smooth_p['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+
+                    st.markdown("<h4>Overall — Smoothed</h4>", unsafe_allow_html=True)
+                    o1, o2, o3, o4 = st.columns(4)
+                    o1.markdown(make_card("On/Off Ratio", sci(smooth_p["onoff"]), "#5B5F97"), unsafe_allow_html=True)
+                    o2.markdown(make_card("ON Current / Width", f"{smooth_p['on_current_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
+                    o3.markdown(make_card("OFF Current / Width", f"{smooth_p['off_current_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
+                    o4.markdown(make_card("Hysteresis", f"{smooth_p['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
+                else:
+                    st.info("Smoothing 체크박스를 켜면 upward spike 제거 후 재계산된 parameter가 Raw 값과 함께 표시됩니다.")
+
                 st.markdown("---")
 
                 # 그래프 생성 (모드에 따라 타이틀 분기)
@@ -575,21 +661,38 @@ if uploaded_file:
 
                 fig.add_trace(go.Scatter(x=vg_fwd, y=id_fwd_original.abs(), name="Forward raw", line=dict(color=color_fwd, width=1, dash='dot'), opacity=0.45, legend="legend"), row=1, col=1)
                 fig.add_trace(go.Scatter(x=vg_bwd, y=id_bwd_original.abs(), name="Backward raw", line=dict(color=color_bwd, width=1, dash='dot'), opacity=0.45, legend="legend"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=vg_fwd, y=id_fwd.abs(), name="Forward smoothed", line=dict(color=color_fwd_smooth, width=2.5), legend="legend"), row=1, col=1)
-                fig.add_trace(go.Scatter(x=vg_bwd, y=id_bwd.abs(), name="Backward smoothed", line=dict(color=color_bwd_smooth, width=2.5), legend="legend"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=vg_fwd, y=id_fwd.abs(), name="Forward corrected", line=dict(color=color_fwd_smooth, width=2.5), legend="legend"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=vg_bwd, y=id_bwd.abs(), name="Backward corrected", line=dict(color=color_bwd_smooth, width=2.5), legend="legend"), row=1, col=1)
+                if apply_smoothing and np.any(res["spike_fwd"]):
+                    fig.add_trace(go.Scatter(
+                        x=vg_fwd[res["spike_fwd"]],
+                        y=id_fwd_original.abs()[res["spike_fwd"]],
+                        mode="markers", name="Removed Fwd spikes",
+                        marker=dict(symbol="x", size=10, color="black"),
+                        legend="legend"
+                    ), row=1, col=1)
+                if apply_smoothing and np.any(res["spike_bwd"]):
+                    fig.add_trace(go.Scatter(
+                        x=vg_bwd[res["spike_bwd"]],
+                        y=id_bwd_original.abs()[res["spike_bwd"]],
+                        mode="markers", name="Removed Bwd spikes",
+                        marker=dict(symbol="x", size=10, color="black"),
+                        legend="legend"
+                    ), row=1, col=1)
+
                 if has_ig:
                     fig.add_trace(go.Scatter(x=vg_fwd, y=ig_fwd.abs(), name="Ig (Fwd)", line=dict(color='dimgray', dash='dot'), showlegend=False), row=1, col=1)
                     fig.add_trace(go.Scatter(x=vg_bwd, y=ig_bwd.abs(), name="Ig (Bwd)", line=dict(color='dimgray', dash='dot'), showlegend=False), row=1, col=1)
                     
                 fig.add_trace(go.Scatter(x=vg_fwd, y=id_fwd_original.abs(), name="Forward raw", line=dict(color=color_fwd, width=1, dash='dot'), opacity=0.45, legend="legend2"), row=1, col=2)
                 fig.add_trace(go.Scatter(x=vg_bwd, y=id_bwd_original.abs(), name="Backward raw", line=dict(color=color_bwd, width=1, dash='dot'), opacity=0.45, legend="legend2"), row=1, col=2)
-                fig.add_trace(go.Scatter(x=vg_fwd, y=id_fwd.abs(), name="Forward smoothed", line=dict(color=color_fwd_smooth, width=2.5), legend="legend2"), row=1, col=2)
-                fig.add_trace(go.Scatter(x=vg_bwd, y=id_bwd.abs(), name="Backward smoothed", line=dict(color=color_bwd_smooth, width=2.5), legend="legend2"), row=1, col=2)
+                fig.add_trace(go.Scatter(x=vg_fwd, y=id_fwd.abs(), name="Forward corrected", line=dict(color=color_fwd_smooth, width=2.5), legend="legend2"), row=1, col=2)
+                fig.add_trace(go.Scatter(x=vg_bwd, y=id_bwd.abs(), name="Backward corrected", line=dict(color=color_bwd_smooth, width=2.5), legend="legend2"), row=1, col=2)
                         
                 fig.add_trace(go.Scatter(x=vg_fwd, y=np.abs(gm_fwd_raw), name="Forward raw", line=dict(color=color_fwd, width=1, dash='dot'), opacity=0.45, legend="legend3"), row=2, col=1)
                 fig.add_trace(go.Scatter(x=vg_bwd, y=np.abs(gm_bwd_raw), name="Backward raw", line=dict(color=color_bwd, width=1, dash='dot'), opacity=0.45, legend="legend3"), row=2, col=1)
-                fig.add_trace(go.Scatter(x=vg_fwd, y=np.abs(gm_fwd_smooth), name="Forward smoothed", line=dict(color=color_fwd_smooth, width=2.5), legend="legend3"), row=2, col=1)
-                fig.add_trace(go.Scatter(x=vg_bwd, y=np.abs(gm_bwd_smooth), name="Backward smoothed", line=dict(color=color_bwd_smooth, width=2.5), legend="legend3"), row=2, col=1)
+                fig.add_trace(go.Scatter(x=vg_fwd, y=np.abs(gm_fwd_smooth), name="Forward corrected", line=dict(color=color_fwd_smooth, width=2.5), legend="legend3"), row=2, col=1)
+                fig.add_trace(go.Scatter(x=vg_bwd, y=np.abs(gm_bwd_smooth), name="Backward corrected", line=dict(color=color_bwd_smooth, width=2.5), legend="legend3"), row=2, col=1)
                 
                 # 시각화 
                 fig.add_vline(x=vg_max_gm_fwd, line_width=1.5, line_dash=dense_dash, line_color=color_fwd_smooth, opacity=0.8, row=2, col=1)
@@ -597,8 +700,8 @@ if uploaded_file:
                         
                 fig.add_trace(go.Scatter(x=vg_fwd, y=mobility_fwd_raw, name="Forward raw", line=dict(color=color_fwd, width=1, dash='dot'), opacity=0.45, legend="legend4"), row=2, col=2)
                 fig.add_trace(go.Scatter(x=vg_bwd, y=mobility_bwd_raw, name="Backward raw", line=dict(color=color_bwd, width=1, dash='dot'), opacity=0.45, legend="legend4"), row=2, col=2)
-                fig.add_trace(go.Scatter(x=vg_fwd, y=mobility_fwd_smooth, name="Forward smoothed", line=dict(color=color_fwd_smooth, width=2.5), legend="legend4"), row=2, col=2)
-                fig.add_trace(go.Scatter(x=vg_bwd, y=mobility_bwd_smooth, name="Backward smoothed", line=dict(color=color_bwd_smooth, width=2.5), legend="legend4"), row=2, col=2)
+                fig.add_trace(go.Scatter(x=vg_fwd, y=mobility_fwd_smooth, name="Forward corrected", line=dict(color=color_fwd_smooth, width=2.5), legend="legend4"), row=2, col=2)
+                fig.add_trace(go.Scatter(x=vg_bwd, y=mobility_bwd_smooth, name="Backward corrected", line=dict(color=color_bwd_smooth, width=2.5), legend="legend4"), row=2, col=2)
                 
                 fig.add_vline(x=vg_max_gm_fwd, line_width=1.5, line_dash=dense_dash, line_color=color_fwd_smooth, opacity=0.8, row=2, col=2)
                 fig.add_vline(x=vg_max_gm_bwd, line_width=1.5, line_dash=dense_dash, line_color=color_bwd_smooth, opacity=0.8, row=2, col=2)
@@ -668,6 +771,7 @@ if uploaded_file:
                     "gm_forward_smoothed": gm_fwd_smooth,
                     "mobility_forward_raw": mobility_fwd_raw,
                     "mobility_forward_smoothed": mobility_fwd_smooth,
+                    "upward_spike_removed_forward": res["spike_fwd"],
                 })
                 bwd_export = pd.DataFrame({
                     "GateV_backward": vg_bwd,
@@ -677,6 +781,7 @@ if uploaded_file:
                     "gm_backward_smoothed": gm_bwd_smooth,
                     "mobility_backward_raw": mobility_bwd_raw,
                     "mobility_backward_smoothed": mobility_bwd_smooth,
+                    "upward_spike_removed_backward": res["spike_bwd"],
                 })
                 export_df = pd.concat([export_df, bwd_export], axis=1)
                 st.download_button(
