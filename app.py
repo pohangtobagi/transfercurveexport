@@ -41,27 +41,55 @@ Cox = Cox_nf * 1e-9
 
 st.sidebar.markdown("---")
 st.sidebar.header("Data Cleaning")
-apply_smoothing = st.sidebar.checkbox("Remove spikes + Smooth", value=False)
+apply_smoothing = st.sidebar.checkbox(
+    "Remove derivative spikes + Smooth",
+    value=False,
+    key="apply_smoothing"
+)
 
-if apply_smoothing:
-    smooth_center = st.sidebar.number_input("Center Vg (V)", value=0.0, step=0.5)
-    smooth_half_width = st.sidebar.number_input("Cleaning range (±V)", min_value=0.0, value=5.0, step=0.5)
-    smooth_kernel = st.sidebar.slider("Spike detection window", 3, 21, 5, 2)
-    smooth_z = st.sidebar.slider(
-        "Upward spike threshold", 2.0, 12.0, 4.0, 0.5,
-        help="작을수록 위로 튀는 점을 더 많이 제거합니다."
-    )
-    smooth_window = st.sidebar.slider("Smoothing window", 3, 31, 7, 2)
-    smooth_polyorder = st.sidebar.slider("Polynomial order", 1, 4, 2)
-    smooth_log_domain = st.sidebar.checkbox("Smooth in log(|Id|)", value=True)
-else:
-    smooth_center = 0.0
-    smooth_half_width = 5.0
-    smooth_kernel = 5
-    smooth_z = 4.0
-    smooth_window = 7
-    smooth_polyorder = 2
-    smooth_log_domain = True
+# 설정 위젯은 ON/OFF와 관계없이 계속 표시하여 입력값이 사라지지 않게 함
+clean_full_sweep = st.sidebar.checkbox(
+    "Detect spikes over full sweep",
+    value=True,
+    key="clean_full_sweep",
+    help="체크하면 사진처럼 -20 V 부근 등에 나타나는 spike도 전체 sweep에서 검출합니다."
+)
+smooth_center = st.sidebar.number_input(
+    "Center Vg (V)", value=0.0, step=0.5, key="smooth_center"
+)
+smooth_half_width = st.sidebar.number_input(
+    "Cleaning range (±V)", min_value=0.0, value=5.0, step=0.5,
+    key="smooth_half_width",
+    disabled=clean_full_sweep,
+)
+smooth_kernel = st.sidebar.slider(
+    "Spike detection window", 3, 21, 5, 2, key="smooth_kernel"
+)
+smooth_z = st.sidebar.slider(
+    "Derivative spike threshold", 2.0, 12.0, 4.0, 0.5,
+    key="smooth_z",
+    help="작을수록 Gm/mobility의 좁고 높은 이상 peak를 더 적극적으로 제거합니다."
+)
+smooth_window = st.sidebar.slider(
+    "Smoothing window", 3, 31, 7, 2, key="smooth_window"
+)
+smooth_polyorder = st.sidebar.slider(
+    "Polynomial order", 1, 4, 2, key="smooth_polyorder"
+)
+smooth_log_domain = st.sidebar.checkbox(
+    "Smooth in log(|Id|)", value=True, key="smooth_log_domain"
+)
+
+# Cleaning 관련 설정이 바뀌면 active curve의 mobility peak를 다시 자동 탐색
+cleaning_signature = (
+    bool(apply_smoothing), bool(clean_full_sweep), float(smooth_center),
+    float(smooth_half_width), int(smooth_kernel), float(smooth_z),
+    int(smooth_window), int(smooth_polyorder), bool(smooth_log_domain),
+    operating_mode, float(W), float(L), float(Cox_nf),
+)
+_previous_signature = st.session_state.get("_cleaning_signature")
+force_auto_peak = _previous_signature != cleaning_signature
+st.session_state["_cleaning_signature"] = cleaning_signature
 
 
 # -----------------------------
@@ -110,116 +138,153 @@ def sci(value, digits=2):
     return f"{coef:.{digits}f}E{exp}"
 
 
-def detect_upward_spikes(transformed, kernel_size=5, z_threshold=4.0):
+def _robust_sigma(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return np.finfo(float).eps
+    med = np.median(values)
+    mad = np.median(np.abs(values - med))
+    sigma = 1.4826 * mad
+    return max(float(sigma), np.finfo(float).eps)
+
+
+def detect_derivative_spike_points(vg, transformed, kernel_size=5, z_threshold=4.0):
     """
-    위쪽으로만 갑자기 튀는 점을 검출.
-    검출된 점은 smoothing 입력과 최종 plot에서 완전히 제외한다.
+    Gm/mobility에 생기는 좁고 높은 peak의 원인이 되는 원래 Id 점을 찾는다.
+
+    1) transformed Id의 1차 미분에서 국소 이상치를 찾고
+    2) 원래 Id 점이 양쪽 이웃 연결선보다 위로 솟았는지 확인한 뒤
+    3) 해당 Id 행 자체를 제거 대상으로 반환한다.
     """
+    vg = np.asarray(vg, dtype=float)
     y = np.asarray(transformed, dtype=float)
-    valid = np.isfinite(y)
-    mask = np.zeros(len(y), dtype=bool)
+    n = len(y)
+    remove = np.zeros(n, dtype=bool)
+    valid = np.isfinite(vg) & np.isfinite(y)
+    if valid.sum() < 7:
+        return remove
 
-    if valid.sum() < 5:
-        return mask
-
+    # 결측만 임시 보간하여 검출에 사용; 최종 데이터에 재삽입하지 않음
+    idx = np.arange(n)
     work = y.copy()
-    idx = np.arange(len(work))
     work[~valid] = np.interp(idx[~valid], idx[valid], work[valid])
 
     kernel_size = max(3, int(kernel_size))
     if kernel_size % 2 == 0:
         kernel_size += 1
-    max_kernel = len(work) if len(work) % 2 else len(work) - 1
+    max_kernel = n if n % 2 else n - 1
     kernel_size = min(kernel_size, max_kernel)
     if kernel_size < 3:
-        return mask
+        return remove
 
-    local_med = median_filter(work, size=kernel_size, mode="nearest")
-    residual = work - local_med
-    med = np.median(residual)
-    mad = np.median(np.abs(residual - med))
-    sigma = 1.4826 * mad
+    # 1차 미분 자체의 국소 spike 검출
+    derivative = np.gradient(work, vg)
+    d_med = median_filter(derivative, size=kernel_size, mode='nearest')
+    d_res = derivative - d_med
+    d_sigma = _robust_sigma(d_res)
+    derivative_candidate = np.abs(d_res) > z_threshold * d_sigma
 
-    if not np.isfinite(sigma) or sigma <= 0:
-        d = np.diff(work)
-        dmad = np.median(np.abs(d - np.median(d))) if len(d) else 0.0
-        sigma = max(1.4826 * dmad, np.finfo(float).eps)
+    # 원래 current의 점 형태 spike: 양쪽 이웃 연결선 대비 위쪽 돌출량
+    expected = work.copy()
+    expected[1:-1] = 0.5 * (work[:-2] + work[2:])
+    curvature = work - expected
+    c_sigma = _robust_sigma(curvature[1:-1])
+    point_candidate = curvature > max(0.45 * z_threshold * c_sigma, np.finfo(float).eps)
 
-    # Local median보다 위에 있고, 양쪽 이웃 연결선보다도 위에 있는 점
-    neighbor = local_med.copy()
-    if len(work) >= 3:
-        neighbor[1:-1] = 0.5 * (work[:-2] + work[2:])
+    # np.gradient 특성상 한 Id spike가 i-1, i, i+1의 derivative에 흔적을 남김.
+    # derivative 후보 주변 3점 중 연결선 대비 가장 위로 솟은 실제 Id 점을 제거한다.
+    derivative_indices = np.where(derivative_candidate)[0]
+    for di in derivative_indices:
+        lo = max(1, di - 1)
+        hi = min(n - 1, di + 2)
+        candidates = np.arange(lo, hi)
+        candidates = candidates[point_candidate[candidates]]
+        if len(candidates):
+            chosen = int(candidates[np.argmax(curvature[candidates])])
+            remove[chosen] = True
 
-    mask = (
-        (residual > med + z_threshold * sigma)
-        & ((work - neighbor) > 0.5 * z_threshold * sigma)
-        & valid
-    )
+    # 미분 후보를 놓치더라도 매우 뚜렷한 단일 upward point는 직접 제거
+    strong_point = curvature > max(z_threshold * c_sigma, np.finfo(float).eps)
+    remove |= strong_point & point_candidate
 
-    # 양 끝은 자동 제거하지 않음
-    mask[0] = False
-    mask[-1] = False
-    return mask
+    # 양 끝점과 비정상 x는 보존/제외
+    remove[0] = False
+    remove[-1] = False
+    remove &= valid
+    return remove
 
 
 def remove_spikes_and_smooth(vg, current):
     """
-    1) 지정 범위에서 upward spike 검출
-    2) 해당 행을 데이터에서 완전히 제거
-    3) 남은 점끼리만 Savitzky-Golay smoothing
-    4) 제거된 Vg는 최종 plot/calculation에 사용하지 않음
+    반복적으로 derivative spike의 원인이 되는 Id 행을 완전히 삭제한다.
+    삭제된 Vg/Id는 plot, Gm, mobility, parameter 계산 어디에도 사용하지 않는다.
+    이후 남은 점들끼리만 약한 Savitzky-Golay smoothing을 수행한다.
     """
     vg = np.asarray(vg, dtype=float)
     current = np.asarray(current, dtype=float)
-
     base_valid = np.isfinite(vg) & np.isfinite(current)
-    region = base_valid & (np.abs(vg - smooth_center) <= smooth_half_width)
 
     transformed = np.full(len(current), np.nan, dtype=float)
-    sign = np.sign(current)
-    sign[sign == 0] = 1.0
+    signs = np.sign(current)
+    signs[signs == 0] = 1.0
 
     if smooth_log_domain:
-        mag = np.abs(current)
-        nz = mag[base_valid & (mag > 0)]
+        magnitude = np.abs(current)
+        nz = magnitude[base_valid & (magnitude > 0)]
         floor = max(np.min(nz) * 0.1, np.finfo(float).tiny) if len(nz) else np.finfo(float).tiny
-        transformed[base_valid] = np.log10(np.maximum(mag[base_valid], floor))
+        transformed[base_valid] = np.log10(np.maximum(magnitude[base_valid], floor))
     else:
         transformed[base_valid] = current[base_valid]
 
-    region_idx = np.where(region)[0]
-    spike_mask = np.zeros(len(current), dtype=bool)
+    if clean_full_sweep:
+        eligible = base_valid.copy()
+    else:
+        eligible = base_valid & (np.abs(vg - smooth_center) <= smooth_half_width)
 
-    if len(region_idx) >= 5:
-        local_spikes = detect_upward_spikes(
-            transformed[region_idx],
+    removed_global = np.zeros(len(current), dtype=bool)
+    active_indices = np.where(base_valid)[0]
+
+    # 한 번 제거한 뒤 새로 드러나는 이웃 derivative spike까지 최대 4회 반복 검출
+    for _ in range(4):
+        if len(active_indices) < 7:
+            break
+        local_vg = vg[active_indices]
+        local_y = transformed[active_indices]
+        local_eligible = eligible[active_indices]
+
+        local_remove = detect_derivative_spike_points(
+            local_vg, local_y,
             kernel_size=smooth_kernel,
             z_threshold=smooth_z,
         )
-        spike_mask[region_idx] = local_spikes
+        local_remove &= local_eligible
+        if not np.any(local_remove):
+            break
+        removed_global[active_indices[local_remove]] = True
+        active_indices = active_indices[~local_remove]
 
-    keep = base_valid & (~spike_mask)
+    keep = base_valid & (~removed_global)
     vg_clean = vg[keep]
-    transformed_clean = transformed[keep]
-    sign_clean = sign[keep]
+    y_clean = transformed[keep]
+    sign_clean = signs[keep]
 
-    # Sweep order 유지. 남은 점들끼리만 smoothing.
-    corrected = transformed_clean.copy()
+    # 남은 점들만 smoothing. 제거점은 절대 보간하거나 plot에 재삽입하지 않음.
+    corrected = y_clean.copy()
     n = len(corrected)
     window = int(smooth_window)
     if window % 2 == 0:
         window += 1
     max_window = n if n % 2 else n - 1
     window = min(window, max_window)
-
-    if n >= 3 and window >= 3:
+    if n >= 5 and window >= 3:
         poly = min(int(smooth_polyorder), window - 1)
         if window > poly:
             corrected = savgol_filter(
                 corrected,
                 window_length=window,
                 polyorder=poly,
-                mode="interp",
+                mode='interp',
             )
 
     if smooth_log_domain:
@@ -230,7 +295,7 @@ def remove_spikes_and_smooth(vg, current):
     return (
         pd.Series(vg_clean).reset_index(drop=True),
         pd.Series(current_clean).reset_index(drop=True),
-        spike_mask,
+        removed_global,
     )
 
 
@@ -363,9 +428,9 @@ def analyze_sheet(df, file_id, sheet_name):
     master_f = f"peak_f_{file_id}_{sheet_name}_{operating_mode}_{state_tag}"
     master_b = f"peak_b_{file_id}_{sheet_name}_{operating_mode}_{state_tag}"
 
-    if master_f not in st.session_state:
+    if force_auto_peak or master_f not in st.session_state:
         st.session_state[master_f] = float(vg_fwd.iloc[auto_f])
-    if master_b not in st.session_state:
+    if force_auto_peak or master_b not in st.session_state:
         st.session_state[master_b] = float(vg_bwd.iloc[auto_b])
 
     target_f = float(st.session_state[master_f])
@@ -507,9 +572,9 @@ if uploaded_file:
         slider_f = f"slider_{res['master_f']}"
         slider_b = f"slider_{res['master_b']}"
 
-        if slider_f not in st.session_state:
+        if force_auto_peak or slider_f not in st.session_state:
             st.session_state[slider_f] = st.session_state[res["master_f"]]
-        if slider_b not in st.session_state:
+        if force_auto_peak or slider_b not in st.session_state:
             st.session_state[slider_b] = st.session_state[res["master_b"]]
 
         def sync_f():
@@ -577,7 +642,7 @@ if uploaded_file:
             removed = int(np.sum(res["spike_fwd"]) + np.sum(res["spike_bwd"]))
             st.caption(
                 f"Removed upward spikes: {removed}. "
-                "검출된 점은 plot과 parameter 계산에서 완전히 제외되었습니다."
+                "검출된 원래 Id 행은 plot, Gm, mobility 및 parameter 계산에서 완전히 제외되었습니다."
             )
 
         st.markdown("---")
