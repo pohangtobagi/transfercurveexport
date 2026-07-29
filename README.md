@@ -1,26 +1,11 @@
-# FET Analysis with Selective Smoothing
+# FET Analysis Clean UI v4
 
-## 추가된 기능
-
-- 기본 smoothing 범위: -5 V ~ +5 V
-- Forward/Backward sweep를 각각 분리하여 smoothing
-- smoothed DrainI로 gm 및 mobility-vs-gate-bias 재계산
-- raw/smoothed transfer, gm, mobility 동시 비교
-- ON current density = max(|smoothed DrainI|) / Width
-- OFF current density = min(nonzero |smoothed DrainI|) / Width
-- ON/OFF ratio도 위와 동일한 ON/OFF current 값 사용
+- Smoothing OFF: 원본 parameter를 큰 카드로 표시
+- Smoothing ON:
+  - 위쪽 spike 행을 완전히 제거
+  - 제거된 점은 plot과 parameter 계산에서 제외
+  - 남은 점끼리만 Savitzky–Golay smoothing
+  - cleaned mobility curve에서 peak를 새로 자동 탐색
+  - 기존 카드 위치에서 mobility, Vth, SS, hysteresis, ON/OFF 값만 교체
+- Raw/Smoothed 비교표와 중복 그래프 제거
 - ON/OFF current density 단위: A/μm
-- 각 시트 및 전체 평균 결과 지원
-- raw/smoothed current, gm, mobility CSV 다운로드
-
-## 실행
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## 주의
-
-Mobility peak는 smoothing 조건에 민감할 수 있습니다. 원본 곡선과 smoothed 곡선을 함께 확인하고,
-보정 범위와 window를 분석 기록에 남기는 것을 권장합니다.
