@@ -30,28 +30,29 @@ div[data-testid="stSlider"] div[role="slider"] > div {
     background-color: transparent !important;
 }
 
-/* Four aligned parameter regions below the four plots */
+/* Plot-aligned parameter regions: compact enough to avoid page scrolling */
+div[data-testid="stPlotlyChart"] {
+    margin-bottom: -34px !important;
+}
 .parameter-region {
-    min-height: 560px;
+    margin-top: -10px !important;
+    min-height: 0 !important;
 }
 .parameter-region div[data-testid="stVerticalBlockBorderWrapper"] {
-    min-height: 230px;
+    min-height: 0 !important;
 }
 .parameter-emphasis {
-    font-size: 17px;
-    font-weight: 850;
-    text-align: center;
-    padding: 7px 4px 2px 4px;
-}
-
-/* Keep the controls visually attached to their corresponding plots */
-div[data-testid="stPlotlyChart"] { margin-bottom: -14px !important; }
-.parameter-region { margin-top: 0 !important; min-height: 548px; }
-.parameter-emphasis {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 850;
     text-align: left !important;
-    padding: 0 4px 5px 4px;
+    padding: 0 3px 2px 3px;
+    margin: 0 !important;
+}
+div[data-testid="stMainBlockContainer"] div[data-testid="stVerticalBlock"] {
+    gap: 0.28rem !important;
+}
+div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
+    gap: 0.35rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -786,16 +787,51 @@ def calc_curves(vg, current, mode, w, l, cox, vd):
 
 
 def auto_peak_index(mobility):
+    """Detect the most abnormal local change, not the absolute maximum.
+
+    The score favors an isolated point whose value departs strongly from the
+    line connecting its two neighbors. This is robust against a broad,
+    physically meaningful mobility maximum and instead targets narrow spikes.
+    """
     values = np.asarray(mobility, dtype=float)
-    if len(values) == 0:
+    n = len(values)
+    if n == 0:
         return 0
+    if n < 5:
+        finite = np.where(np.isfinite(values), values, -np.inf)
+        return int(np.argmax(finite))
 
-    finite = np.where(np.isfinite(values), values, -np.inf)
+    work = values.copy()
+    valid = np.isfinite(work)
+    if valid.sum() < 3:
+        return 0
+    idx = np.arange(n)
+    work[~valid] = np.interp(idx[~valid], idx[valid], work[valid])
 
-    # 양 끝 미분 artifact를 피하기 위해 가능한 경우 양 끝 2개 제외
-    if len(finite) > 5:
-        return int(np.argmax(finite[2:-2]) + 2)
-    return int(np.argmax(finite))
+    # Local departure from the straight line through the neighboring points.
+    expected = 0.5 * (work[:-2] + work[2:])
+    curvature = np.abs(work[1:-1] - expected)
+
+    # A genuine one-point spike normally produces large changes on both sides.
+    left_jump = np.abs(work[1:-1] - work[:-2])
+    right_jump = np.abs(work[2:] - work[1:-1])
+    two_sided_jump = np.minimum(left_jump, right_jump)
+
+    # Robust normalization prevents a high-mobility plateau from winning.
+    def robust_scale(arr):
+        arr = np.asarray(arr, dtype=float)
+        med = np.nanmedian(arr)
+        mad = np.nanmedian(np.abs(arr - med))
+        return max(1.4826 * mad, np.finfo(float).eps)
+
+    score = curvature / robust_scale(curvature)
+    score += two_sided_jump / robust_scale(two_sided_jump)
+
+    # Exclude edge-adjacent points where numerical differentiation is unstable.
+    score[:1] = -np.inf
+    score[-1:] = -np.inf
+    best = int(np.nanargmax(score)) + 1
+    return best
 
 
 def parameter_values(
@@ -1892,9 +1928,9 @@ with main_content:
                 title_text="SS (mV/dec)", row=1, col=4, **common_axis,
             )
             fig.update_layout(
-                height=470,
+                height=350,
                 template="plotly_white",
-                margin=dict(t=55, b=45, l=40, r=15),
+                margin=dict(t=38, b=22, l=36, r=10),
                 showlegend=False,
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -2050,6 +2086,9 @@ with main_content:
             # 3) Mobility: mobility + peak elimination in one region
             with parameter_columns[2]:
                 st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
+                # Match the emphasized ON/OFF header height, so the mobility box
+                # begins exactly at the top edge of the ON box.
+                st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
                 with st.container(border=True):
                     st.markdown(
                         "<div style='font-size:15px;font-weight:750;"
@@ -2107,8 +2146,8 @@ with main_content:
                             r_state, mob_r_col, keys["removed_bwd"],
                             keys["remove_slider_bwd"], keys["force_auto_peak_bwd"],
                         )
-                    # Match the visual depth of the stacked ON and OFF boxes.
-                    st.markdown("<div style='height:118px;'></div>", unsafe_allow_html=True)
+                    # Extend the box to the bottom edge of the OFF box.
+                    st.markdown("<div style='height:54px;'></div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             # 4) SS curve: SS
