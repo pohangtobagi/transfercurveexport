@@ -310,38 +310,47 @@ def nearest_row_by_vg(active_df, selected_vg):
 
 
 
+
 def sorted_unique_vg(active_df):
     """현재 sweep에 남아 있는 실제 Vg 값 목록."""
     values = pd.to_numeric(active_df["GateV"], errors="coerce").dropna().unique()
     return np.sort(values.astype(float))
 
 
-def move_to_adjacent_vg(current_value, active_df, direction):
-    """
-    direction=-1: 정렬된 Vg에서 한 단계 감소
-    direction=+1: 정렬된 Vg에서 한 단계 증가
-    제거된 Vg는 목록에 없으므로 자동으로 건너뛴다.
-    """
-    values = sorted_unique_vg(active_df)
-    if len(values) == 0:
-        return float(current_value)
-
-    nearest = int(np.argmin(np.abs(values - float(current_value))))
-    target = int(np.clip(nearest + int(direction), 0, len(values) - 1))
-    return float(values[target])
-
-
 def initialize_slider_in_range(key, active_df, default_value):
+    """위젯이 생성되기 전에만 session_state를 초기화한다."""
     values = sorted_unique_vg(active_df)
     if len(values) == 0:
         return
 
     if key not in st.session_state:
-        st.session_state[key] = float(default_value)
+        nearest = int(np.argmin(np.abs(values - float(default_value))))
+        st.session_state[key] = float(values[nearest])
+        return
 
     current = float(st.session_state[key])
     nearest = int(np.argmin(np.abs(values - current)))
-    st.session_state[key] = float(values[nearest])
+    nearest_value = float(values[nearest])
+
+    # 현재 값이 삭제된 Vg라면 위젯 생성 전에 가장 가까운 남은 Vg로 보정
+    if not np.isclose(current, nearest_value):
+        st.session_state[key] = nearest_value
+
+
+def step_discrete_slider(state_key, active_df, direction):
+    """
+    버튼 callback 전용.
+    Streamlit widget 생성 이후 직접 값을 바꾸지 않고,
+    callback 내부에서 실제 Vg 한 단계씩 이동한다.
+    """
+    values = sorted_unique_vg(active_df)
+    if len(values) == 0:
+        return
+
+    current = float(st.session_state.get(state_key, values[0]))
+    nearest = int(np.argmin(np.abs(values - current)))
+    target = int(np.clip(nearest + int(direction), 0, len(values) - 1))
+    st.session_state[state_key] = float(values[target])
 
 
 def render_discrete_vg_control(
@@ -353,9 +362,10 @@ def render_discrete_vg_control(
     button_prefix,
 ):
     """
-    - 버튼 | 실제 Vg slider | + 버튼
-    슬라이더 step은 원 데이터의 대표 Vg 간격을 사용하고,
-    버튼은 현재 남은 실제 Vg 목록에서 정확히 한 행씩 이동한다.
+    − 버튼 | 실제 측정 Vg select_slider | + 버튼
+
+    select_slider options를 실제 남아 있는 Vg 값으로 제한하므로
+    슬라이더가 측정 데이터 간격과 정확히 일치한다.
     """
     initialize_slider_in_range(state_key, active_df, default_value)
 
@@ -363,40 +373,34 @@ def render_discrete_vg_control(
     if len(values) == 0:
         return np.nan
 
-    diffs = np.diff(values)
-    positive_diffs = np.abs(diffs[np.abs(diffs) > np.finfo(float).eps])
-    step = float(np.min(positive_diffs)) if len(positive_diffs) else 0.5
+    options = [float(v) for v in values]
 
     st.sidebar.markdown(f"**{title}**")
     minus_col, slider_col, plus_col = st.sidebar.columns([1, 5, 1])
 
-    if minus_col.button("−", key=f"{button_prefix}_minus", use_container_width=True):
-        st.session_state[state_key] = move_to_adjacent_vg(
-            st.session_state[state_key], active_df, -1
-        )
-        st.rerun()
-
-    slider_col.slider(
-        slider_label,
-        min_value=float(values.min()),
-        max_value=float(values.max()),
-        step=step,
-        key=state_key,
-        label_visibility="collapsed",
+    minus_col.button(
+        "−",
+        key=f"{button_prefix}_minus",
+        use_container_width=True,
+        on_click=step_discrete_slider,
+        args=(state_key, active_df, -1),
     )
 
-    # 슬라이더가 실제 Vg 사이 값에 놓이면 가장 가까운 실제 데이터로 snap
-    current = float(st.session_state[state_key])
-    nearest = int(np.argmin(np.abs(values - current)))
-    snapped = float(values[nearest])
-    if not np.isclose(current, snapped):
-        st.session_state[state_key] = snapped
+    slider_col.select_slider(
+        slider_label,
+        options=options,
+        key=state_key,
+        label_visibility="collapsed",
+        format_func=lambda value: f"{value:.2f}",
+    )
 
-    if plus_col.button("+", key=f"{button_prefix}_plus", use_container_width=True):
-        st.session_state[state_key] = move_to_adjacent_vg(
-            st.session_state[state_key], active_df, +1
-        )
-        st.rerun()
+    plus_col.button(
+        "+",
+        key=f"{button_prefix}_plus",
+        use_container_width=True,
+        on_click=step_discrete_slider,
+        args=(state_key, active_df, +1),
+    )
 
     return float(st.session_state[state_key])
 
