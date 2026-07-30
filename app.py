@@ -630,13 +630,13 @@ def fix_inf(values):
 
 def make_card(title, value, color):
     return f"""
-    <div style='text-align:left; padding:5px 2px 7px 2px; min-width:0;'>
-        <div style='font-size:13px; color:#555; line-height:1.25;
+    <div style='text-align:left; padding:7px 4px 9px 4px; min-width:0;'>
+        <div style='font-size:14px; color:#555; line-height:1.25;
                     min-height:34px; margin-bottom:5px;
                     overflow-wrap:anywhere; word-break:keep-all;'>
             {title}
         </div>
-        <div style='font-size:18px; font-weight:700; color:{color};
+        <div style='font-size:21px; font-weight:750; color:{color};
                     line-height:1.2; min-height:23px;
                     white-space:nowrap; overflow:hidden;
                     text-overflow:ellipsis;'>
@@ -670,6 +670,32 @@ def calculate_ss(id_vals, vg_vals):
     slope = slope[np.isfinite(slope) & (slope > 0)]
     return 1000.0 / np.max(slope) if len(slope) else np.nan
 
+
+
+def ss_curve(id_vals, vg_vals):
+    """Pointwise SS curve in mV/dec using the same derivative basis as calculate_ss."""
+    current = np.asarray(id_vals, dtype=float)
+    vg = np.asarray(vg_vals, dtype=float)
+    log_id = np.log10(np.abs(current) + 1e-15)
+    slope = np.abs(np.gradient(log_id, vg))
+    if len(slope) >= 3:
+        slope = np.convolve(slope, np.ones(3) / 3.0, mode="same")
+    out = np.full(len(slope), np.nan, dtype=float)
+    valid = np.isfinite(slope) & (slope > 0)
+    out[valid] = 1000.0 / slope[valid]
+    return out
+
+
+def vth_at_index(vg_vals, id_vals, gm_vals, idx, mode):
+    vg = np.asarray(vg_vals, dtype=float)
+    current = np.asarray(id_vals, dtype=float)
+    gm = np.asarray(gm_vals, dtype=float)
+    idx = int(np.clip(idx, 0, len(vg) - 1))
+    gm_value = gm[idx]
+    if not np.isfinite(gm_value) or abs(gm_value) <= np.finfo(float).eps:
+        return np.nan
+    numerator = np.sqrt(abs(current[idx])) if mode == "Saturation" else current[idx]
+    return float(vg[idx] - numerator / gm_value)
 
 
 def split_sweep(df):
@@ -1268,7 +1294,8 @@ with main_content:
             # ====================================================
             # ====================================================
             # ====================================================
-            # Data title
+            # ====================================================
+            # Unified direction-dependent parameters
             # ====================================================
             st.markdown(
                 f"<h3 style='color:#333; margin:2px 0 6px 0;'>"
@@ -1276,336 +1303,305 @@ with main_content:
                 unsafe_allow_html=True,
             )
 
-            parameter_direction_key = (
+            direction_key = (
                 f"parameter_direction_{file_id}_{selected_sheet}_{operating_mode}"
             )
-            if parameter_direction_key not in st.session_state:
-                st.session_state[parameter_direction_key] = "Forward"
+            if direction_key not in st.session_state:
+                st.session_state[direction_key] = "Forward"
 
-            # Build one selectable current list covering both sweep directions.
-            current_options = []
-            for direction_name, sweep_df in (("Fwd", fwd), ("Rev", bwd)):
-                for row_idx, row in sweep_df.iterrows():
-                    abs_current = abs(float(row["DrainI_active"]))
-                    current_options.append(
-                        {
-                            "direction": direction_name,
-                            "row_idx": int(row_idx),
-                            "vg": float(row["GateV"]),
-                            "current": abs_current,
-                            "density": abs_current / float(W),
-                        }
-                    )
-
-            finite_option_indices = [
-                i for i, item in enumerate(current_options)
-                if np.isfinite(item["current"])
-            ]
-            positive_option_indices = [
-                i for i in finite_option_indices
-                if current_options[i]["current"] > 0
-            ]
-            default_on_idx = (
-                max(finite_option_indices, key=lambda i: current_options[i]["current"])
-                if finite_option_indices else 0
+            header_left, header_right = st.columns([4.4, 1.6])
+            header_left.markdown(
+                "<h4 style='margin:2px 0 3px 0;'>Overall Parameters</h4>",
+                unsafe_allow_html=True,
             )
-            default_off_idx = (
-                min(positive_option_indices, key=lambda i: current_options[i]["current"])
-                if positive_option_indices else default_on_idx
+            selected_direction = header_right.radio(
+                "Sweep direction",
+                ["Forward", "Reverse"],
+                key=direction_key,
+                horizontal=True,
+                label_visibility="collapsed",
             )
 
-            on_select_key = f"on_current_select_{file_id}_{selected_sheet}_{operating_mode}"
-            off_select_key = f"off_current_select_{file_id}_{selected_sheet}_{operating_mode}"
-            valid_current_indices = list(range(len(current_options)))
+            is_forward = selected_direction == "Forward"
+            active_df = fwd if is_forward else bwd
+            active_mu = res["mu_fwd"] if is_forward else res["mu_bwd"]
+            active_gm = res["gm_fwd"] if is_forward else res["gm_bwd"]
+            direction_short = "Fwd" if is_forward else "Rev"
+            color_active = "blue" if is_forward else "red"
+            auto_idx = res["auto_idx_f"] if is_forward else res["auto_idx_b"]
 
-            if (
-                on_select_key not in st.session_state
-                or st.session_state[on_select_key] not in valid_current_indices
-            ):
-                st.session_state[on_select_key] = default_on_idx
-            if (
-                off_select_key not in st.session_state
-                or st.session_state[off_select_key] not in valid_current_indices
-            ):
-                st.session_state[off_select_key] = default_off_idx
+            peak_key = (
+                keys["peak_slider_fwd"] if is_forward
+                else keys["peak_slider_bwd"]
+            )
+            peak_default = float(active_df["GateV"].iloc[auto_idx])
+            initialize_slider_in_range(peak_key, active_df, peak_default)
 
-            selected_on_idx = int(st.session_state[on_select_key])
-            selected_off_idx = int(st.session_state[off_select_key])
-            selected_on_current = current_options[selected_on_idx]["current"]
-            selected_off_current = current_options[selected_off_idx]["current"]
+            vth_key = (
+                f"vth_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}"
+                if is_forward
+                else f"vth_slider_rev_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            initialize_slider_in_range(vth_key, active_df, peak_default)
 
+            active_ss_curve = ss_curve(
+                active_df["DrainI_active"], active_df["GateV"]
+            )
+            finite_ss = np.where(
+                np.isfinite(active_ss_curve), active_ss_curve, np.inf
+            )
+            ss_auto_idx = (
+                int(np.argmin(finite_ss))
+                if np.any(np.isfinite(active_ss_curve))
+                else auto_idx
+            )
+            ss_key = (
+                f"ss_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}"
+                if is_forward
+                else f"ss_slider_rev_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            initialize_slider_in_range(
+                ss_key,
+                active_df,
+                float(active_df["GateV"].iloc[ss_auto_idx]),
+            )
+
+            # Direction-dependent ON/OFF selectors.
+            on_key = (
+                f"on_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}"
+                if is_forward
+                else f"on_slider_rev_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            off_key = (
+                f"off_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}"
+                if is_forward
+                else f"off_slider_rev_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            abs_active_current = np.abs(
+                pd.to_numeric(active_df["DrainI_active"], errors="coerce").to_numpy()
+            )
+            default_on_idx = int(np.nanargmax(abs_active_current))
+            positive_mask = np.isfinite(abs_active_current) & (abs_active_current > 0)
+            if positive_mask.any():
+                default_off_idx = int(
+                    np.where(positive_mask)[0][np.argmin(abs_active_current[positive_mask])]
+                )
+            else:
+                default_off_idx = default_on_idx
+
+            initialize_slider_in_range(
+                on_key,
+                active_df,
+                float(active_df["GateV"].iloc[default_on_idx]),
+            )
+            initialize_slider_in_range(
+                off_key,
+                active_df,
+                float(active_df["GateV"].iloc[default_off_idx]),
+            )
+
+            # Current selected values.
+            peak_vg = float(st.session_state[peak_key])
+            peak_idx = int((active_df["GateV"] - peak_vg).abs().idxmin())
+
+            vth_vg = float(st.session_state[vth_key])
+            vth_idx = int((active_df["GateV"] - vth_vg).abs().idxmin())
+            selected_vth = vth_at_index(
+                active_df["GateV"],
+                active_df["DrainI_active"],
+                active_gm,
+                vth_idx,
+                operating_mode,
+            )
+
+            ss_vg = float(st.session_state[ss_key])
+            ss_idx = int((active_df["GateV"] - ss_vg).abs().idxmin())
+            selected_ss = (
+                float(active_ss_curve[ss_idx])
+                if np.isfinite(active_ss_curve[ss_idx])
+                else np.nan
+            )
+
+            on_vg = float(st.session_state[on_key])
+            off_vg = float(st.session_state[off_key])
+            on_idx, on_row, on_density = current_density_at_vg(active_df, on_vg, W)
+            off_idx, off_row, off_density = current_density_at_vg(active_df, off_vg, W)
+            on_current = abs(float(on_row["DrainI_active"]))
+            off_current = abs(float(off_row["DrainI_active"]))
+            selected_onoff = (
+                on_current / off_current
+                if np.isfinite(off_current) and off_current > 0
+                else np.nan
+            )
+
+            # Both sweep peak indices still maintained for plotting.
             peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
             peak_b_vg = float(st.session_state[keys["peak_slider_bwd"]])
             idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
             idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
 
-            params = parameter_values(
+            base_params = parameter_values(
                 fwd["GateV"], fwd["DrainI_active"],
                 res["gm_fwd"], res["mu_fwd"], idx_f,
                 bwd["GateV"], bwd["DrainI_active"],
                 res["gm_bwd"], res["mu_bwd"], idx_b,
                 operating_mode, W,
-                on_current_override=selected_on_current,
-                off_current_override=selected_off_current,
             )
 
-            overall_col, direction_col = st.columns([1, 1], gap="large")
+            selected_mu = float(active_mu[peak_idx])
+            selected_peak_vg = float(active_df["GateV"].iloc[peak_idx])
 
-            with overall_col:
+            # 2 × 4 parameter layout
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
                 st.markdown(
-                    "<h4 style='margin:2px 0 3px 0;'>Overall Data Parameters</h4>",
-                    unsafe_allow_html=True,
-                )
-
-                o1, o2 = st.columns(2)
-                with o1:
-                    st.markdown(
-                        make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
-                        unsafe_allow_html=True,
-                    )
-                with o2:
-                    st.markdown(
-                        make_card(
-                            "Hysteresis (V)",
-                            f"{params['hysteresis']:.2f}",
-                            "#5B5F97",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-                o3, o4 = st.columns(2)
-                with o3:
-                    st.markdown(
-                        make_card(
-                            "ON Current / Width (A/μm)",
-                            sci(params["on_density"]),
-                            "#5B5F97",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    st.select_slider(
-                        "ON current point",
-                        options=valid_current_indices,
-                        key=on_select_key,
-                        format_func=lambda i: (
-                            f"{current_options[i]['direction']} "
-                            f"Vg={current_options[i]['vg']:.2f}"
-                        ),
-                        label_visibility="collapsed",
-                    )
-                with o4:
-                    st.markdown(
-                        make_card(
-                            "OFF Current / Width (A/μm)",
-                            sci(params["off_density"]),
-                            "#5B5F97",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    st.select_slider(
-                        "OFF current point",
-                        options=valid_current_indices,
-                        key=off_select_key,
-                        format_func=lambda i: (
-                            f"{current_options[i]['direction']} "
-                            f"Vg={current_options[i]['vg']:.2f}"
-                        ),
-                        label_visibility="collapsed",
-                    )
-
-            with direction_col:
-                title_col, toggle_col = st.columns([1.4, 1.2])
-                parameter_direction = toggle_col.radio(
-                    "Parameter sweep",
-                    ["Forward", "Reverse"],
-                    key=parameter_direction_key,
-                    horizontal=True,
-                    label_visibility="collapsed",
-                )
-                show_forward = parameter_direction == "Forward"
-                title_color = "#6FADCF" if show_forward else "#F05650"
-                title_col.markdown(
-                    f"<h4 style='color:{title_color}; margin:2px 0 3px 0;'>"
-                    f"{parameter_direction} Parameters</h4>",
-                    unsafe_allow_html=True,
-                )
-
-                if show_forward:
-                    mu_value = params["mu_fwd"]
-                    vth_value = params["vth_fwd"]
-                    peak_value = params["peak_vg_fwd"]
-                    ss_value = params["ss_fwd"]
-                else:
-                    mu_value = params["mu_bwd"]
-                    vth_value = params["vth_bwd"]
-                    peak_value = params["peak_vg_bwd"]
-                    ss_value = params["ss_bwd"]
-
-                p1, p2 = st.columns(2)
-                p1.markdown(
-                    make_card("Peak Mobility (cm²/V·s)", f"{mu_value:.2f}", "#2E60AB"),
-                    unsafe_allow_html=True,
-                )
-                p2.markdown(
                     make_card(
-                        "Threshold Voltage, Vₜₕ (V)",
-                        f"{vth_value:.2f}",
+                        "Mobility (cm²/V·s)",
+                        f"{selected_mu:.2f}",
+                        "#2E60AB",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="Mobility Vg",
+                    state_key=peak_key,
+                    active_df=active_df,
+                    default_value=peak_default,
+                    button_prefix=(
+                        f"mobility_param_{direction_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=c1,
+                )
+            with c2:
+                st.markdown(
+                    make_card(
+                        "ON/OFF Ratio",
+                        sci(selected_onoff),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with c3:
+                st.markdown(
+                    make_card(
+                        "ON Current / Width (A/μm)",
+                        sci(on_density),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="ON Vg",
+                    state_key=on_key,
+                    active_df=active_df,
+                    default_value=float(active_df["GateV"].iloc[default_on_idx]),
+                    button_prefix=(
+                        f"on_param_{direction_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=c3,
+                )
+            with c4:
+                st.markdown(
+                    make_card(
+                        "OFF Current / Width (A/μm)",
+                        sci(off_density),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="OFF Vg",
+                    state_key=off_key,
+                    active_df=active_df,
+                    default_value=float(active_df["GateV"].iloc[default_off_idx]),
+                    button_prefix=(
+                        f"off_param_{direction_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=c4,
+                )
+
+            c5, c6, c7, c8 = st.columns(4)
+            with c5:
+                st.markdown(
+                    make_card(
+                        "Hysteresis (V)",
+                        f"{base_params['hysteresis']:.2f}",
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with c6:
+                st.markdown(
+                    make_card(
+                        "Vₜₕ (V)",
+                        f"{selected_vth:.2f}" if np.isfinite(selected_vth) else "N/A",
                         "#A23B72",
                     ),
                     unsafe_allow_html=True,
                 )
-                p3, p4 = st.columns(2)
-                p3.markdown(
-                    make_card("Peak Point, Vg (V)", f"{peak_value:.1f}", "#F18F01"),
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="Vth Vg",
+                    state_key=vth_key,
+                    active_df=active_df,
+                    default_value=peak_default,
+                    button_prefix=(
+                        f"vth_param_{direction_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=c6,
+                )
+            with c7:
+                st.markdown(
+                    make_card(
+                        "Peak Point, Vg (V)",
+                        f"{selected_peak_vg:.2f}",
+                        "#F18F01",
+                    ),
                     unsafe_allow_html=True,
                 )
-                p4.markdown(
-                    make_card("SS (mV/dec)", f"{ss_value:.1f}", "#18A558"),
+            with c8:
+                st.markdown(
+                    make_card(
+                        "SS (mV/dec)",
+                        f"{selected_ss:.1f}" if np.isfinite(selected_ss) else "N/A",
+                        "#18A558",
+                    ),
                     unsafe_allow_html=True,
-                )
-
-            # ====================================================
-            # Restored original point controls
-            # ====================================================
-            control_direction_key = (
-                f"control_direction_{file_id}_{selected_sheet}_{operating_mode}"
-            )
-            if control_direction_key not in st.session_state:
-                st.session_state[control_direction_key] = "Forward"
-
-            control_direction = st.radio(
-                "Control direction",
-                ["Forward", "Reverse"],
-                key=control_direction_key,
-                horizontal=True,
-            )
-            control_forward = control_direction == "Forward"
-            control_short = "Fwd" if control_forward else "Rev"
-            control_df = fwd if control_forward else bwd
-            control_auto_idx = (
-                res["auto_idx_f"] if control_forward else res["auto_idx_b"]
-            )
-            force_key = (
-                keys["force_auto_peak_fwd"] if control_forward
-                else keys["force_auto_peak_bwd"]
-            )
-
-            peak_control, removal_control, current_control = st.columns(3, gap="large")
-
-            with peak_control:
-                st.markdown("**Mobility Peak Point**")
-                peak_key = (
-                    keys["peak_slider_fwd"] if control_forward
-                    else keys["peak_slider_bwd"]
                 )
                 render_discrete_vg_control(
                     title="",
-                    slider_label=f"{control_direction} peak Vg",
-                    state_key=peak_key,
-                    active_df=control_df,
-                    default_value=float(control_df["GateV"].iloc[control_auto_idx]),
+                    slider_label="SS Vg",
+                    state_key=ss_key,
+                    active_df=active_df,
+                    default_value=float(active_df["GateV"].iloc[ss_auto_idx]),
                     button_prefix=(
-                        f"peak_restored_{control_short}_{file_id}_"
+                        f"ss_param_{direction_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
-                    parent=peak_control,
-                )
-                if st.button(
-                    "Auto Max",
-                    key=(
-                        f"auto_restored_{control_short}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    use_container_width=True,
-                ):
-                    st.session_state[force_key] = True
-                    st.rerun()
-
-            with removal_control:
-                st.markdown("**Peak Elimination**")
-                removal_key = (
-                    keys["remove_slider_fwd"] if control_forward
-                    else keys["remove_slider_bwd"]
-                )
-                removal_vg = render_discrete_vg_control(
-                    title="",
-                    slider_label=f"{control_direction} removal Vg",
-                    state_key=removal_key,
-                    active_df=control_df,
-                    default_value=float(control_df["GateV"].iloc[control_auto_idx]),
-                    button_prefix=(
-                        f"remove_restored_{control_short}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    parent=removal_control,
-                )
-                _, removal_row = nearest_row_by_vg(control_df, removal_vg)
-                removed_key = (
-                    keys["removed_fwd"] if control_forward
-                    else keys["removed_bwd"]
-                )
-                remove_col, reset_col = st.columns(2)
-                remove_col.button(
-                    "Remove",
-                    key=(
-                        f"remove_btn_restored_{control_short}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    use_container_width=True,
-                    on_click=remove_mobility_point,
-                    args=(
-                        removed_key,
-                        int(removal_row["__source_index"]),
-                        force_key,
-                    ),
-                )
-                reset_col.button(
-                    "Reset",
-                    key=(
-                        f"reset_btn_restored_{control_short}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    use_container_width=True,
-                    on_click=reset_mobility_points,
-                    args=(removed_key, force_key),
-                )
-                st.caption(
-                    f"Removed: {len(st.session_state.get(removed_key, []))}"
+                    parent=c8,
                 )
 
-            with current_control:
-                st.markdown("**Transfer Current Point**")
-                current_key = (
-                    keys["current_slider_fwd"] if control_forward
-                    else keys["current_slider_bwd"]
-                )
-                current_vg = render_discrete_vg_control(
-                    title="",
-                    slider_label=f"{control_direction} current Vg",
-                    state_key=current_key,
-                    active_df=control_df,
-                    default_value=float(control_df["GateV"].iloc[0]),
-                    button_prefix=(
-                        f"current_restored_{control_short}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    parent=current_control,
-                )
-                _, _, active_density = current_density_at_vg(
-                    control_df, current_vg, W
-                )
-                st.caption(f"|Id|/W = {sci_plain(active_density)} A/μm")
+            # Re-read widget values after controls render.
+            peak_vg = float(st.session_state[peak_key])
+            peak_idx = int((active_df["GateV"] - peak_vg).abs().idxmin())
+            vth_vg = float(st.session_state[vth_key])
+            vth_idx = int((active_df["GateV"] - vth_vg).abs().idxmin())
+            ss_vg = float(st.session_state[ss_key])
+            ss_idx = int((active_df["GateV"] - ss_vg).abs().idxmin())
+            on_vg = float(st.session_state[on_key])
+            off_vg = float(st.session_state[off_key])
+            on_idx, on_row, on_density = current_density_at_vg(active_df, on_vg, W)
+            off_idx, off_row, off_density = current_density_at_vg(active_df, off_vg, W)
 
-            current_f_vg = float(st.session_state[keys["current_slider_fwd"]])
-            current_b_vg = float(st.session_state[keys["current_slider_bwd"]])
-            current_f_idx, current_f_row, current_f_density = current_density_at_vg(
-                fwd, current_f_vg, W
-            )
-            current_b_idx, current_b_row, current_b_density = current_density_at_vg(
-                bwd, current_b_vg, W
-            )
-
-            # Three plots in one horizontal row
+            # ====================================================
+            # Four horizontal plots
             # ====================================================
             graph_mobility_title = (
                 "Linear Mobility"
@@ -1614,13 +1610,14 @@ with main_content:
             )
             fig = make_subplots(
                 rows=1,
-                cols=3,
+                cols=4,
                 subplot_titles=(
                     "Transfer (Log)",
                     "Transfer (Linear)",
                     graph_mobility_title,
+                    "Subthreshold Swing",
                 ),
-                horizontal_spacing=0.10,
+                horizontal_spacing=0.085,
             )
 
             color_fwd = "blue"
@@ -1630,11 +1627,12 @@ with main_content:
             vg_bwd = bwd["GateV"]
             id_bwd = bwd["DrainI_active"]
 
-            # Drain-current traces
+            # Transfer curves.
             for col_num in (1, 2):
                 fig.add_trace(
                     go.Scatter(
-                        x=vg_fwd, y=np.abs(id_fwd),
+                        x=vg_fwd,
+                        y=np.abs(id_fwd),
                         name="Id Forward",
                         line=dict(color=color_fwd),
                         showlegend=(col_num == 1),
@@ -1643,7 +1641,8 @@ with main_content:
                 )
                 fig.add_trace(
                     go.Scatter(
-                        x=vg_bwd, y=np.abs(id_bwd),
+                        x=vg_bwd,
+                        y=np.abs(id_bwd),
                         name="Id Reverse",
                         line=dict(color=color_bwd),
                         showlegend=(col_num == 1),
@@ -1651,7 +1650,7 @@ with main_content:
                     row=1, col=col_num,
                 )
 
-            # Gate-current traces aligned by source index, even after point removal
+            # Gate current.
             if "GateI" in df.columns:
                 gate_i = pd.to_numeric(df["GateI"], errors="coerce")
                 ig_f = gate_i.iloc[
@@ -1660,11 +1659,11 @@ with main_content:
                 ig_b = gate_i.iloc[
                     bwd["__source_index"].astype(int).to_numpy()
                 ].reset_index(drop=True)
-
                 for col_num in (1, 2):
                     fig.add_trace(
                         go.Scatter(
-                            x=vg_fwd, y=np.abs(ig_f),
+                            x=vg_fwd,
+                            y=np.abs(ig_f),
                             name="Ig Forward",
                             line=dict(color="dimgray", dash="dot"),
                             showlegend=(col_num == 1),
@@ -1673,7 +1672,8 @@ with main_content:
                     )
                     fig.add_trace(
                         go.Scatter(
-                            x=vg_bwd, y=np.abs(ig_b),
+                            x=vg_bwd,
+                            y=np.abs(ig_b),
                             name="Ig Reverse",
                             line=dict(color="black", dash="dot"),
                             showlegend=(col_num == 1),
@@ -1681,29 +1681,32 @@ with main_content:
                         row=1, col=col_num,
                     )
 
-            # Selected current points
-            fig.add_trace(
-                go.Scatter(
-                    x=[float(current_f_row["GateV"])],
-                    y=[abs(float(current_f_row["DrainI_active"]))],
-                    mode="markers",
-                    marker=dict(symbol="circle-open", size=10, color="black"),
-                    showlegend=False,
-                ),
-                row=1, col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=[float(current_b_row["GateV"])],
-                    y=[abs(float(current_b_row["DrainI_active"]))],
-                    mode="markers",
-                    marker=dict(symbol="square-open", size=10, color="black"),
-                    showlegend=False,
-                ),
-                row=1, col=1,
-            )
+            # Selected ON/OFF points on both transfer plots.
+            for col_num in (1, 2):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(on_row["GateV"])],
+                        y=[abs(float(on_row["DrainI_active"]))],
+                        mode="markers",
+                        marker=dict(symbol="circle-open", size=11, color="green"),
+                        name="Selected ON",
+                        showlegend=(col_num == 1),
+                    ),
+                    row=1, col=col_num,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(off_row["GateV"])],
+                        y=[abs(float(off_row["DrainI_active"]))],
+                        mode="markers",
+                        marker=dict(symbol="square-open", size=11, color="orange"),
+                        name="Selected OFF",
+                        showlegend=(col_num == 1),
+                    ),
+                    row=1, col=col_num,
+                )
 
-            # Mobility
+            # Mobility curves and selected Vg line.
             fig.add_trace(
                 go.Scatter(
                     x=vg_fwd, y=res["mu_fwd"],
@@ -1722,20 +1725,66 @@ with main_content:
                 ),
                 row=1, col=3,
             )
-
             fig.add_vline(
-                x=float(fwd["GateV"].iloc[idx_f]),
+                x=float(active_df["GateV"].iloc[peak_idx]),
                 line_dash="dot",
-                line_width=1.5,
-                line_color=color_fwd,
+                line_width=1.6,
+                line_color=color_active,
                 row=1, col=3,
             )
+
+            # SS curves and selected Vg line.
+            ss_fwd_curve = ss_curve(fwd["DrainI_active"], fwd["GateV"])
+            ss_bwd_curve = ss_curve(bwd["DrainI_active"], bwd["GateV"])
+            fig.add_trace(
+                go.Scatter(
+                    x=vg_fwd, y=ss_fwd_curve,
+                    name="SS Forward",
+                    line=dict(color=color_fwd),
+                    showlegend=False,
+                ),
+                row=1, col=4,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=vg_bwd, y=ss_bwd_curve,
+                    name="SS Reverse",
+                    line=dict(color=color_bwd),
+                    showlegend=False,
+                ),
+                row=1, col=4,
+            )
             fig.add_vline(
-                x=float(bwd["GateV"].iloc[idx_b]),
+                x=float(active_df["GateV"].iloc[ss_idx]),
                 line_dash="dot",
-                line_width=1.5,
-                line_color=color_bwd,
-                row=1, col=3,
+                line_width=1.6,
+                line_color=color_active,
+                row=1, col=4,
+            )
+
+            # Vth tangent on the linear transfer plot.
+            tangent_x = np.asarray(active_df["GateV"], dtype=float)
+            tangent_y = (
+                float(active_df["DrainI_active"].iloc[vth_idx])
+                + float(active_gm[vth_idx])
+                * (tangent_x - float(active_df["GateV"].iloc[vth_idx]))
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=tangent_x,
+                    y=np.abs(tangent_y),
+                    name=f"{selected_direction} tangent",
+                    line=dict(color=color_active, dash="dot"),
+                    showlegend=False,
+                ),
+                row=1, col=2,
+            )
+            fig.add_vline(
+                x=float(active_df["GateV"].iloc[vth_idx]),
+                line_dash="dot",
+                line_width=1.2,
+                line_color=color_active,
+                row=1, col=2,
             )
 
             common_axis = dict(
@@ -1760,10 +1809,84 @@ with main_content:
                 title_text="Mobility (cm²/V·s)",
                 row=1, col=3, **common_axis,
             )
+            fig.update_yaxes(
+                title_text="SS (mV/dec)",
+                row=1, col=4, **common_axis,
+            )
             fig.update_layout(
-                height=440,
+                height=450,
                 template="plotly_white",
-                margin=dict(t=60, b=50, l=50, r=20),
-                legend=dict(orientation="h", y=1.13, x=0),
+                margin=dict(t=65, b=45, l=40, r=15),
+                legend=dict(orientation="h", y=1.15, x=0),
             )
             st.plotly_chart(fig, use_container_width=True)
+
+            # ====================================================
+            # Peak elimination below plots
+            # ====================================================
+            st.markdown(
+                "<h4 style='margin:8px 0 2px 0;'>Peak Elimination</h4>",
+                unsafe_allow_html=True,
+            )
+            removal_key = (
+                keys["remove_slider_fwd"] if is_forward
+                else keys["remove_slider_bwd"]
+            )
+            removed_key = (
+                keys["removed_fwd"] if is_forward
+                else keys["removed_bwd"]
+            )
+            force_key = (
+                keys["force_auto_peak_fwd"] if is_forward
+                else keys["force_auto_peak_bwd"]
+            )
+            initialize_slider_in_range(
+                removal_key,
+                active_df,
+                float(active_df["GateV"].iloc[auto_idx]),
+            )
+
+            removal_slider_col, remove_button_col, reset_button_col = st.columns(
+                [4.5, 1.0, 1.0]
+            )
+            removal_vg = render_discrete_vg_control(
+                title="",
+                slider_label="Removal Vg",
+                state_key=removal_key,
+                active_df=active_df,
+                default_value=float(active_df["GateV"].iloc[auto_idx]),
+                button_prefix=(
+                    f"remove_final_{direction_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                parent=removal_slider_col,
+            )
+            _, removal_row = nearest_row_by_vg(active_df, removal_vg)
+            remove_button_col.button(
+                "Remove",
+                key=(
+                    f"remove_final_btn_{direction_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                use_container_width=True,
+                on_click=remove_mobility_point,
+                args=(
+                    removed_key,
+                    int(removal_row["__source_index"]),
+                    force_key,
+                ),
+            )
+            reset_button_col.button(
+                "Reset",
+                key=(
+                    f"reset_final_btn_{direction_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                use_container_width=True,
+                on_click=reset_mobility_points,
+                args=(removed_key, force_key),
+            )
+            st.caption(
+                f"{selected_direction} removed points: "
+                f"{len(st.session_state.get(removed_key, []))}"
+            )
