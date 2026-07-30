@@ -215,6 +215,10 @@ def reset_mobility_points(removed_key, force_key):
     st.session_state[force_key] = True
 
 
+def set_state_value(state_key, value):
+    st.session_state[state_key] = float(value)
+
+
 def sci(value, digits=2):
     """HTML scientific notation: xx × 10^xx."""
     if not np.isfinite(value) or value == 0:
@@ -448,11 +452,7 @@ auto_restore_last_log()
 # ============================================================
 initialize_log_state()
 
-st.sidebar.markdown(
-    "<div style='font-size:15px; font-weight:750; margin:0 0 3px 0;'>"
-    "Device Information</div>",
-    unsafe_allow_html=True,
-)
+st.sidebar.header("Device Information")
 operating_mode = st.sidebar.radio(
     "Operating Mode",
     ["Linear", "Saturation"],
@@ -1061,6 +1061,21 @@ def render_discrete_vg_control(
 if st.session_state.get("restore_error"):
     st.error(st.session_state.pop("restore_error"))
 
+current_project = st.session_state.get("active_log_folder")
+project_info_col, project_add_col = st.columns([5.3, 1.7], gap="small")
+project_info_col.markdown(
+    f"<div style='font-size:14px; padding-top:7px;'>"
+    f"Project: <b>{current_project or 'None'}</b></div>",
+    unsafe_allow_html=True,
+)
+if project_add_col.button(
+    "Add to Project",
+    key="add_project_top_global",
+    use_container_width=True,
+    disabled=current_project is None,
+):
+    st.session_state["add_project_requested"] = True
+
 uploaded_file = st.file_uploader(
     "측정된 엑셀 파일을 업로드하세요",
     type=["xlsx", "xls"],
@@ -1438,33 +1453,21 @@ with main_content:
                 else np.nan
             )
 
-            # Header: data, project, and add button.
-            data_col, project_col, add_col = st.columns([4.2, 2.2, 1.4], gap="small")
-            data_col.markdown(
+            # Data title only; project controls are above the uploader.
+            st.markdown(
                 f"<h3 style='color:#333; margin:2px 0 6px 0;'>"
                 f"📊 {selected_sheet} ({operating_mode})</h3>",
                 unsafe_allow_html=True,
             )
-            current_project = st.session_state.get("active_log_folder")
-            project_col.markdown(
-                f"<div style='font-size:13px; padding-top:10px;'>"
-                f"Project: <b>{current_project or 'None'}</b></div>",
-                unsafe_allow_html=True,
-            )
 
-            if add_col.button(
-                "Add to Project",
-                key=f"add_project_{file_id}_{selected_sheet}_{operating_mode}",
-                use_container_width=True,
-                disabled=current_project is None,
-            ):
+            if st.session_state.pop("add_project_requested", False):
                 try:
                     uploaded_file.seek(0)
                     saved_file_bytes = uploaded_file.read()
                     uploaded_file.seek(0)
                 except Exception:
                     saved_file_bytes = None
-
+    
                 log_entry = {
                     "_log_id": str(uuid.uuid4()),
                     "_file_bytes": saved_file_bytes,
@@ -1521,167 +1524,176 @@ with main_content:
                 save_projects_state()
                 st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
                 st.rerun()
-
+    
             st.markdown(
                 "<h4 style='margin:2px 0 5px 0;'>Overall Parameters</h4>",
                 unsafe_allow_html=True,
             )
 
-            def render_direction_parameters(state):
-                border_color = "#6FADCF" if state["name"] == "Forward" else "#F05650"
+            def slider_with_auto(container, state, key_name, default_value, label, prefix):
+                render_discrete_vg_control(
+                    title="",
+                    slider_label=label,
+                    state_key=key_name,
+                    active_df=state["df"],
+                    default_value=float(default_value),
+                    button_prefix=prefix,
+                    parent=container,
+                )
+                container.button(
+                    "Auto Set",
+                    key=f"{prefix}_auto_set",
+                    use_container_width=True,
+                    on_click=set_state_value,
+                    args=(key_name, float(default_value)),
+                )
+
+            def dual_metric_box(title, f_value, r_value, renderer_f=None, renderer_r=None):
                 with st.container(border=True):
                     st.markdown(
-                        f"<div style='font-size:16px; font-weight:750; "
-                        f"color:{border_color}; margin-bottom:3px;'>"
-                        f"{state['name']}</div>",
+                        f"<div style='font-size:15px; font-weight:750; margin-bottom:5px;'>"
+                        f"{title}</div>",
                         unsafe_allow_html=True,
                     )
+                    left, right = st.columns(2, gap="small")
+                    with left:
+                        st.markdown(
+                            f"<div style='color:#2E60AB; font-size:12px; font-weight:700;'>"
+                            f"Forward</div><div style='font-size:20px; font-weight:750;'>"
+                            f"{f_value}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if renderer_f is not None:
+                            renderer_f(left)
+                    with right:
+                        st.markdown(
+                            f"<div style='border-left:1px solid rgba(120,120,120,.35); "
+                            f"padding-left:10px; color:#D94B45; font-size:12px; font-weight:700;'>"
+                            f"Reverse</div><div style='border-left:1px solid rgba(120,120,120,.35); "
+                            f"padding-left:10px; font-size:20px; font-weight:750;'>"
+                            f"{r_value}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if renderer_r is not None:
+                            renderer_r(right)
 
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
-                        st.markdown(
-                            make_card(
-                                "Mobility (cm²/V·s)",
-                                f"{state['mobility']:.2f}",
-                                "#2E60AB",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        render_discrete_vg_control(
-                            title="",
-                            slider_label=f"{state['name']} mobility Vg",
-                            state_key=state["peak_key"],
-                            active_df=state["df"],
-                            default_value=state["peak_default"],
-                            button_prefix=(
-                                f"mobility_{state['short']}_{file_id}_"
-                                f"{selected_sheet}_{operating_mode}"
-                            ),
-                            parent=c1,
-                        )
-                    with c2:
-                        st.markdown(
-                            make_card(
-                                "ON/OFF Ratio", sci(state["onoff"]), "#5B5F97"
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                    with c3:
-                        st.markdown(
-                            make_card(
-                                "ON Current / Width (A/μm)",
-                                sci(state["on_density"]),
-                                "#5B5F97",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        render_discrete_vg_control(
-                            title="",
-                            slider_label=f"{state['name']} ON Vg",
-                            state_key=state["on_key"],
-                            active_df=state["df"],
-                            default_value=float(
-                                state["df"]["GateV"].iloc[state["on_auto_idx"]]
-                            ),
-                            button_prefix=(
-                                f"on_{state['short']}_{file_id}_"
-                                f"{selected_sheet}_{operating_mode}"
-                            ),
-                            parent=c3,
-                        )
-                    with c4:
-                        st.markdown(
-                            make_card(
-                                "OFF Current / Width (A/μm)",
-                                sci(state["off_density"]),
-                                "#5B5F97",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        render_discrete_vg_control(
-                            title="",
-                            slider_label=f"{state['name']} OFF Vg",
-                            state_key=state["off_key"],
-                            active_df=state["df"],
-                            default_value=float(
-                                state["df"]["GateV"].iloc[state["off_auto_idx"]]
-                            ),
-                            button_prefix=(
-                                f"off_{state['short']}_{file_id}_"
-                                f"{selected_sheet}_{operating_mode}"
-                            ),
-                            parent=c4,
-                        )
+            row1 = st.columns(4, gap="medium")
+            with row1[0]:
+                dual_metric_box(
+                    "Mobility (cm²/V·s)",
+                    f"{f_state['mobility']:.2f}",
+                    f"{r_state['mobility']:.2f}",
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["peak_key"], f_state["peak_default"],
+                        "Forward mobility Vg",
+                        f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["peak_key"], r_state["peak_default"],
+                        "Reverse mobility Vg",
+                        f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+            with row1[1]:
+                dual_metric_box(
+                    "ON/OFF Ratio",
+                    sci(f_state["onoff"]),
+                    sci(r_state["onoff"]),
+                )
+            with row1[2]:
+                dual_metric_box(
+                    "ON Current / Width (A/μm)",
+                    sci(f_state["on_density"]),
+                    sci(r_state["on_density"]),
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["on_key"],
+                        float(f_state["df"]["GateV"].iloc[f_state["on_auto_idx"]]),
+                        "Forward ON Vg",
+                        f"on_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["on_key"],
+                        float(r_state["df"]["GateV"].iloc[r_state["on_auto_idx"]]),
+                        "Reverse ON Vg",
+                        f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+            with row1[3]:
+                dual_metric_box(
+                    "OFF Current / Width (A/μm)",
+                    sci(f_state["off_density"]),
+                    sci(r_state["off_density"]),
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["off_key"],
+                        float(f_state["df"]["GateV"].iloc[f_state["off_auto_idx"]]),
+                        "Forward OFF Vg",
+                        f"off_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["off_key"],
+                        float(r_state["df"]["GateV"].iloc[r_state["off_auto_idx"]]),
+                        "Reverse OFF Vg",
+                        f"off_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
 
-                    c5, c6, c7, c8 = st.columns(4)
-                    with c5:
-                        st.markdown(
-                            make_card(
-                                "Hysteresis (V)",
-                                f"{selected_hysteresis:.2f}"
-                                if np.isfinite(selected_hysteresis) else "N/A",
-                                "#5B5F97",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                    with c6:
-                        st.markdown(
-                            make_card(
-                                "Vₜₕ (V)",
-                                f"{state['vth']:.2f}"
-                                if np.isfinite(state["vth"]) else "N/A",
-                                "#A23B72",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        render_discrete_vg_control(
-                            title="",
-                            slider_label=f"{state['name']} Vth Vg",
-                            state_key=state["vth_key"],
-                            active_df=state["df"],
-                            default_value=state["peak_default"],
-                            button_prefix=(
-                                f"vth_{state['short']}_{file_id}_"
-                                f"{selected_sheet}_{operating_mode}"
-                            ),
-                            parent=c6,
-                        )
-                    with c7:
-                        st.markdown(
-                            make_card(
-                                "Peak Point, Vg (V)",
-                                f"{state['peak_vg']:.2f}",
-                                "#F18F01",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                    with c8:
-                        st.markdown(
-                            make_card(
-                                "SS (mV/dec)",
-                                f"{state['ss']:.1f}"
-                                if np.isfinite(state["ss"]) else "N/A",
-                                "#18A558",
-                            ),
-                            unsafe_allow_html=True,
-                        )
-                        render_discrete_vg_control(
-                            title="",
-                            slider_label=f"{state['name']} SS Vg",
-                            state_key=state["ss_key"],
-                            active_df=state["df"],
-                            default_value=float(
-                                state["df"]["GateV"].iloc[state["ss_auto_idx"]]
-                            ),
-                            button_prefix=(
-                                f"ss_{state['short']}_{file_id}_"
-                                f"{selected_sheet}_{operating_mode}"
-                            ),
-                            parent=c8,
-                        )
-
-            render_direction_parameters(f_state)
-            render_direction_parameters(r_state)
+            row2 = st.columns(4, gap="medium")
+            with row2[0]:
+                with st.container(border=True):
+                    st.markdown(
+                        "<div style='font-size:15px; font-weight:750;'>Hysteresis (V)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div style='font-size:22px; font-weight:750; color:#5B5F97;'>"
+                        f"{selected_hysteresis:.2f}</div>"
+                        if np.isfinite(selected_hysteresis)
+                        else "<div style='font-size:22px; font-weight:750;'>N/A</div>",
+                        unsafe_allow_html=True,
+                    )
+                    h1, h2 = st.columns(2)
+                    h1.caption(f"Forward Vth: {f_state['vth']:.2f} V")
+                    h2.caption(f"Reverse Vth: {r_state['vth']:.2f} V")
+            with row2[1]:
+                dual_metric_box(
+                    "Vₜₕ (V)",
+                    f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
+                    f"{r_state['vth']:.2f}" if np.isfinite(r_state["vth"]) else "N/A",
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["vth_key"], f_state["peak_default"],
+                        "Forward Vth Vg",
+                        f"vth_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["vth_key"], r_state["peak_default"],
+                        "Reverse Vth Vg",
+                        f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+            with row2[2]:
+                dual_metric_box(
+                    "Peak Point, Vg (V)",
+                    f"{f_state['peak_vg']:.2f}",
+                    f"{r_state['peak_vg']:.2f}",
+                )
+            with row2[3]:
+                dual_metric_box(
+                    "SS (mV/dec)",
+                    f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
+                    f"{r_state['ss']:.1f}" if np.isfinite(r_state["ss"]) else "N/A",
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["ss_key"],
+                        float(f_state["df"]["GateV"].iloc[f_state["ss_auto_idx"]]),
+                        "Forward SS Vg",
+                        f"ss_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["ss_key"],
+                        float(r_state["df"]["GateV"].iloc[r_state["ss_auto_idx"]]),
+                        "Reverse SS Vg",
+                        f"ss_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
 
             # Recompute states after widgets render so plots use latest values.
             f_state = prepare_direction_state(
@@ -1816,32 +1828,31 @@ with main_content:
                         line_color=state["color"], row=1, col=4,
                     )
 
-            # One short local tangent per direction on |Id|. This avoids the
-            # mirrored positive-slope branch caused by abs(full tangent line).
+            # Full dotted tangent for each direction on the displayed |Id| curve.
             for state in (f_state, r_state):
                 x_all = np.asarray(state["df"]["GateV"], dtype=float)
-                y_all = np.abs(
-                    np.asarray(state["df"]["DrainI_active"], dtype=float)
-                )
+                y_all = np.abs(np.asarray(state["df"]["DrainI_active"], dtype=float))
                 idx = state["vth_idx"]
                 slope_abs = np.gradient(y_all, x_all)[idx]
-                left = max(0, idx - 2)
-                right = min(len(x_all), idx + 3)
-                x_local = x_all[left:right]
-                y_local = y_all[idx] + slope_abs * (x_local - x_all[idx])
-                valid = np.isfinite(y_local) & (y_local >= 0)
+                tangent_y = y_all[idx] + slope_abs * (x_all - x_all[idx])
+                valid = np.isfinite(tangent_y) & (tangent_y >= 0)
                 if valid.sum() >= 2:
                     fig.add_trace(
                         go.Scatter(
-                            x=x_local[valid], y=y_local[valid],
+                            x=x_all[valid],
+                            y=tangent_y[valid],
                             name=f"{state['name']} tangent",
-                            line=dict(color=state["color"], dash="dot"),
+                            line=dict(color=state["color"], dash="dot", width=1.6),
                             showlegend=False,
-                        ), row=1, col=2,
+                        ),
+                        row=1, col=2,
                     )
                 fig.add_vline(
-                    x=state["vth_vg"], line_dash="dot", line_width=1.0,
-                    line_color=state["color"], row=1, col=2,
+                    x=state["vth_vg"],
+                    line_dash="dot",
+                    line_width=1.0,
+                    line_color=state["color"],
+                    row=1, col=2,
                 )
 
             common_axis = dict(
@@ -1864,9 +1875,10 @@ with main_content:
                 title_text="SS (mV/dec)", row=1, col=4, **common_axis,
             )
             fig.update_layout(
-                height=470, template="plotly_white",
-                margin=dict(t=65, b=45, l=40, r=15),
-                legend=dict(orientation="h", y=1.15, x=0),
+                height=470,
+                template="plotly_white",
+                margin=dict(t=55, b=45, l=40, r=15),
+                showlegend=False,
             )
             st.plotly_chart(fig, use_container_width=True)
 
