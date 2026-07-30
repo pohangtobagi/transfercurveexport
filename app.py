@@ -1064,7 +1064,7 @@ if st.session_state.get("restore_error"):
 current_project = st.session_state.get("active_log_folder")
 project_info_col, project_add_col = st.columns([5.3, 1.7], gap="small")
 project_info_col.markdown(
-    f"<div style='font-size:14px; padding-top:7px;'>"
+    f"<div style='font-size:22px; font-weight:800; padding-top:2px;'>"
     f"Project: <b>{current_project or 'None'}</b></div>",
     unsafe_allow_html=True,
 )
@@ -1525,11 +1525,6 @@ with main_content:
                 st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
                 st.rerun()
     
-            st.markdown(
-                "<h4 style='margin:2px 0 5px 0;'>Overall Parameters</h4>",
-                unsafe_allow_html=True,
-            )
-
             def slider_with_auto(container, state, key_name, default_value, label, prefix):
                 render_discrete_vg_control(
                     title="",
@@ -1577,138 +1572,6 @@ with main_content:
                         if renderer_r is not None:
                             renderer_r(right)
 
-            row1 = st.columns(4, gap="medium")
-            with row1[0]:
-                dual_metric_box(
-                    "Mobility (cm²/V·s)",
-                    f"{f_state['mobility']:.2f}",
-                    f"{r_state['mobility']:.2f}",
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["peak_key"], f_state["peak_default"],
-                        "Forward mobility Vg",
-                        f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["peak_key"], r_state["peak_default"],
-                        "Reverse mobility Vg",
-                        f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-            with row1[1]:
-                dual_metric_box(
-                    "ON/OFF Ratio",
-                    sci(f_state["onoff"]),
-                    sci(r_state["onoff"]),
-                )
-            with row1[2]:
-                dual_metric_box(
-                    "ON Current / Width (A/μm)",
-                    sci(f_state["on_density"]),
-                    sci(r_state["on_density"]),
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["on_key"],
-                        float(f_state["df"]["GateV"].iloc[f_state["on_auto_idx"]]),
-                        "Forward ON Vg",
-                        f"on_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["on_key"],
-                        float(r_state["df"]["GateV"].iloc[r_state["on_auto_idx"]]),
-                        "Reverse ON Vg",
-                        f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-            with row1[3]:
-                dual_metric_box(
-                    "OFF Current / Width (A/μm)",
-                    sci(f_state["off_density"]),
-                    sci(r_state["off_density"]),
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["off_key"],
-                        float(f_state["df"]["GateV"].iloc[f_state["off_auto_idx"]]),
-                        "Forward OFF Vg",
-                        f"off_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["off_key"],
-                        float(r_state["df"]["GateV"].iloc[r_state["off_auto_idx"]]),
-                        "Reverse OFF Vg",
-                        f"off_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-
-            row2 = st.columns(4, gap="medium")
-            with row2[0]:
-                with st.container(border=True):
-                    st.markdown(
-                        "<div style='font-size:15px; font-weight:750;'>Hysteresis (V)</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(
-                        f"<div style='font-size:22px; font-weight:750; color:#5B5F97;'>"
-                        f"{selected_hysteresis:.2f}</div>"
-                        if np.isfinite(selected_hysteresis)
-                        else "<div style='font-size:22px; font-weight:750;'>N/A</div>",
-                        unsafe_allow_html=True,
-                    )
-                    h1, h2 = st.columns(2)
-                    h1.caption(f"Forward Vth: {f_state['vth']:.2f} V")
-                    h2.caption(f"Reverse Vth: {r_state['vth']:.2f} V")
-            with row2[1]:
-                dual_metric_box(
-                    "Vₜₕ (V)",
-                    f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
-                    f"{r_state['vth']:.2f}" if np.isfinite(r_state["vth"]) else "N/A",
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["vth_key"], f_state["peak_default"],
-                        "Forward Vth Vg",
-                        f"vth_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["vth_key"], r_state["peak_default"],
-                        "Reverse Vth Vg",
-                        f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-            with row2[2]:
-                dual_metric_box(
-                    "Peak Point, Vg (V)",
-                    f"{f_state['peak_vg']:.2f}",
-                    f"{r_state['peak_vg']:.2f}",
-                )
-            with row2[3]:
-                dual_metric_box(
-                    "SS (mV/dec)",
-                    f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
-                    f"{r_state['ss']:.1f}" if np.isfinite(r_state["ss"]) else "N/A",
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["ss_key"],
-                        float(f_state["df"]["GateV"].iloc[f_state["ss_auto_idx"]]),
-                        "Forward SS Vg",
-                        f"ss_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["ss_key"],
-                        float(r_state["df"]["GateV"].iloc[r_state["ss_auto_idx"]]),
-                        "Reverse SS Vg",
-                        f"ss_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-
-            # Recompute states after widgets render so plots use latest values.
-            f_state = prepare_direction_state(
-                "Forward", "fwd", fwd, res["mu_fwd"], res["gm_fwd"],
-                res["auto_idx_f"],
-            )
-            r_state = prepare_direction_state(
-                "Reverse", "rev", bwd, res["mu_bwd"], res["gm_bwd"],
-                res["auto_idx_b"],
-            )
-            selected_hysteresis = (
-                abs(f_state["vth"] - r_state["vth"])
-                if np.isfinite(f_state["vth"]) and np.isfinite(r_state["vth"])
-                else np.nan
-            )
 
             # ====================================================
             # Four horizontal plots
@@ -1882,45 +1745,40 @@ with main_content:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # ====================================================
-            # Peak elimination below plots, independently for each sweep
-            # ====================================================
             st.markdown(
-                "<h4 style='margin:8px 0 3px 0;'>Peak Elimination</h4>",
+                "<h4 style='margin:10px 0 5px 0;'>Overall Parameters</h4>",
                 unsafe_allow_html=True,
             )
-            remove_f_col, remove_r_col = st.columns(2, gap="large")
 
             def render_removal_control(state, container, removed_key, remove_key, force_key):
                 with container:
                     st.markdown(
-                        f"<div style='font-weight:700; color:{state['color']};'>"
-                        f"{state['name']}</div>",
+                        f"<div style='font-weight:750; color:{state['color']}; "
+                        f"font-size:12px; margin-bottom:3px;'>{state['name']}</div>",
                         unsafe_allow_html=True,
                     )
-                    initialize_slider_in_range(
-                        remove_key,
-                        state["df"],
-                        float(state["df"]["GateV"].iloc[state["auto_idx"]]),
+                    default_vg = float(
+                        state["df"]["GateV"].iloc[state["auto_idx"]]
                     )
-                    slider_col, remove_col, reset_col = st.columns([4.0, 1.0, 1.0])
+                    initialize_slider_in_range(remove_key, state["df"], default_vg)
                     removal_vg = render_discrete_vg_control(
-                        title="", slider_label=f"{state['name']} removal Vg",
-                        state_key=remove_key, active_df=state["df"],
-                        default_value=float(
-                            state["df"]["GateV"].iloc[state["auto_idx"]]
-                        ),
+                        title="",
+                        slider_label=f"{state['name']} removal Vg",
+                        state_key=remove_key,
+                        active_df=state["df"],
+                        default_value=default_vg,
                         button_prefix=(
-                            f"remove_{state['short']}_{file_id}_"
+                            f"remove_inline_{state['short']}_{file_id}_"
                             f"{selected_sheet}_{operating_mode}"
                         ),
-                        parent=slider_col,
+                        parent=container,
                     )
                     _, removal_row = nearest_row_by_vg(state["df"], removal_vg)
+                    remove_col, reset_col = container.columns(2)
                     remove_col.button(
                         "Remove",
                         key=(
-                            f"remove_btn_{state['short']}_{file_id}_"
+                            f"remove_inline_btn_{state['short']}_{file_id}_"
                             f"{selected_sheet}_{operating_mode}"
                         ),
                         use_container_width=True,
@@ -1934,24 +1792,150 @@ with main_content:
                     reset_col.button(
                         "Reset",
                         key=(
-                            f"reset_btn_{state['short']}_{file_id}_"
+                            f"reset_inline_btn_{state['short']}_{file_id}_"
                             f"{selected_sheet}_{operating_mode}"
                         ),
                         use_container_width=True,
                         on_click=reset_mobility_points,
                         args=(removed_key, force_key),
                     )
-                    st.caption(
-                        f"Removed points: {len(st.session_state.get(removed_key, []))}"
+                    container.caption(
+                        f"Removed: {len(st.session_state.get(removed_key, []))}"
                     )
 
-            render_removal_control(
-                f_state, remove_f_col,
-                keys["removed_fwd"], keys["remove_slider_fwd"],
-                keys["force_auto_peak_fwd"],
-            )
-            render_removal_control(
-                r_state, remove_r_col,
-                keys["removed_bwd"], keys["remove_slider_bwd"],
-                keys["force_auto_peak_bwd"],
-            )
+            # First row: Mobility / ON-OFF / ON / OFF
+            row1 = st.columns(4, gap="medium")
+            with row1[0]:
+                dual_metric_box(
+                    "Mobility (cm²/V·s)",
+                    f"{f_state['mobility']:.2f}",
+                    f"{r_state['mobility']:.2f}",
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["peak_key"], f_state["peak_default"],
+                        "Forward mobility Vg",
+                        f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["peak_key"], r_state["peak_default"],
+                        "Reverse mobility Vg",
+                        f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+            with row1[1]:
+                dual_metric_box(
+                    "ON/OFF Ratio",
+                    sci(f_state["onoff"]),
+                    sci(r_state["onoff"]),
+                )
+            with row1[2]:
+                dual_metric_box(
+                    "ON Current / Width (A/μm)",
+                    sci(f_state["on_density"]),
+                    sci(r_state["on_density"]),
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["on_key"],
+                        float(f_state["df"]["GateV"].iloc[f_state["on_auto_idx"]]),
+                        "Forward ON Vg",
+                        f"on_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["on_key"],
+                        float(r_state["df"]["GateV"].iloc[r_state["on_auto_idx"]]),
+                        "Reverse ON Vg",
+                        f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+            with row1[3]:
+                dual_metric_box(
+                    "OFF Current / Width (A/μm)",
+                    sci(f_state["off_density"]),
+                    sci(r_state["off_density"]),
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["off_key"],
+                        float(f_state["df"]["GateV"].iloc[f_state["off_auto_idx"]]),
+                        "Forward OFF Vg",
+                        f"off_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["off_key"],
+                        float(r_state["df"]["GateV"].iloc[r_state["off_auto_idx"]]),
+                        "Reverse OFF Vg",
+                        f"off_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+
+            # Second row: Peak elimination / Hysteresis / Vth / SS
+            row2 = st.columns(4, gap="medium")
+            with row2[0]:
+                with st.container(border=True):
+                    st.markdown(
+                        "<div style='font-size:15px; font-weight:750; "
+                        "margin-bottom:5px;'>Peak Elimination</div>",
+                        unsafe_allow_html=True,
+                    )
+                    remove_f_col, remove_r_col = st.columns(2, gap="small")
+                    render_removal_control(
+                        f_state,
+                        remove_f_col,
+                        keys["removed_fwd"],
+                        keys["remove_slider_fwd"],
+                        keys["force_auto_peak_fwd"],
+                    )
+                    render_removal_control(
+                        r_state,
+                        remove_r_col,
+                        keys["removed_bwd"],
+                        keys["remove_slider_bwd"],
+                        keys["force_auto_peak_bwd"],
+                    )
+            with row2[1]:
+                with st.container(border=True):
+                    st.markdown(
+                        "<div style='font-size:15px; font-weight:750;'>Hysteresis (V)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div style='font-size:22px; font-weight:750; color:#5B5F97;'>"
+                        f"{selected_hysteresis:.2f}</div>"
+                        if np.isfinite(selected_hysteresis)
+                        else "<div style='font-size:22px; font-weight:750;'>N/A</div>",
+                        unsafe_allow_html=True,
+                    )
+                    h1, h2 = st.columns(2)
+                    h1.caption(f"Forward Vth: {f_state['vth']:.2f} V")
+                    h2.caption(f"Reverse Vth: {r_state['vth']:.2f} V")
+            with row2[2]:
+                dual_metric_box(
+                    "Vₜₕ (V)",
+                    f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
+                    f"{r_state['vth']:.2f}" if np.isfinite(r_state["vth"]) else "N/A",
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["vth_key"], f_state["peak_default"],
+                        "Forward Vth Vg",
+                        f"vth_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["vth_key"], r_state["peak_default"],
+                        "Reverse Vth Vg",
+                        f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+            with row2[3]:
+                dual_metric_box(
+                    "SS (mV/dec)",
+                    f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
+                    f"{r_state['ss']:.1f}" if np.isfinite(r_state["ss"]) else "N/A",
+                    renderer_f=lambda c: slider_with_auto(
+                        c, f_state, f_state["ss_key"],
+                        float(f_state["df"]["GateV"].iloc[f_state["ss_auto_idx"]]),
+                        "Forward SS Vg",
+                        f"ss_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                    renderer_r=lambda c: slider_with_auto(
+                        c, r_state, r_state["ss_key"],
+                        float(r_state["df"]["GateV"].iloc[r_state["ss_auto_idx"]]),
+                        "Reverse SS Vg",
+                        f"ss_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                    ),
+                )
+
