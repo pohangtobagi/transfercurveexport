@@ -201,6 +201,14 @@ def parameter_values(
     }
 
 
+def current_density_at_vg(active_df, selected_vg, width):
+    """선택한 실제 Vg에서 |DrainI|/Width를 반환."""
+    idx = int((active_df["GateV"] - float(selected_vg)).abs().idxmin())
+    row = active_df.iloc[idx]
+    density = abs(float(row["DrainI_active"])) / float(width)
+    return idx, row, density
+
+
 def state_keys(file_id, sheet_name, mode):
     stem = f"{file_id}_{sheet_name}_{mode}"
     return {
@@ -210,6 +218,10 @@ def state_keys(file_id, sheet_name, mode):
         "remove_slider_bwd": f"remove_slider_bwd_{stem}",
         "peak_slider_fwd": f"peak_slider_fwd_{stem}",
         "peak_slider_bwd": f"peak_slider_bwd_{stem}",
+        "force_auto_peak_fwd": f"force_auto_peak_fwd_{stem}",
+        "force_auto_peak_bwd": f"force_auto_peak_bwd_{stem}",
+        "current_slider_fwd": f"current_slider_fwd_{stem}",
+        "current_slider_bwd": f"current_slider_bwd_{stem}",
     }
 
 
@@ -218,6 +230,10 @@ def initialize_removal_state(keys):
         st.session_state[keys["removed_fwd"]] = []
     if keys["removed_bwd"] not in st.session_state:
         st.session_state[keys["removed_bwd"]] = []
+    if keys["force_auto_peak_fwd"] not in st.session_state:
+        st.session_state[keys["force_auto_peak_fwd"]] = False
+    if keys["force_auto_peak_bwd"] not in st.session_state:
+        st.session_state[keys["force_auto_peak_bwd"]] = False
 
 
 def build_active_sweep(part, removed_source_indices):
@@ -263,11 +279,20 @@ def analyze_sheet(df, file_id, sheet_name):
     auto_idx_f = auto_peak_index(mu_fwd)
     auto_idx_b = auto_peak_index(mu_bwd)
 
-    # 최초 실행 또는 선택점이 제거되어 더 이상 존재하지 않을 때만 자동 최대점으로 재설정
-    if keys["peak_slider_fwd"] not in st.session_state:
+    # 최초 실행 또는 Remove/Reset 직후에는 현재 mobility의 실제 최대점으로 강제 재설정
+    if (
+        keys["peak_slider_fwd"] not in st.session_state
+        or st.session_state.get(keys["force_auto_peak_fwd"], False)
+    ):
         st.session_state[keys["peak_slider_fwd"]] = float(fwd["GateV"].iloc[auto_idx_f])
-    if keys["peak_slider_bwd"] not in st.session_state:
+        st.session_state[keys["force_auto_peak_fwd"]] = False
+
+    if (
+        keys["peak_slider_bwd"] not in st.session_state
+        or st.session_state.get(keys["force_auto_peak_bwd"], False)
+    ):
         st.session_state[keys["peak_slider_bwd"]] = float(bwd["GateV"].iloc[auto_idx_b])
+        st.session_state[keys["force_auto_peak_bwd"]] = False
 
     peak_target_f = float(st.session_state[keys["peak_slider_fwd"]])
     peak_target_b = float(st.session_state[keys["peak_slider_bwd"]])
@@ -544,6 +569,14 @@ if uploaded_file:
             f"Bwd μ = {params['mu_bwd']:.3g} cm²/V·s"
         )
 
+        auto_col_f, auto_col_b = st.sidebar.columns(2)
+        if auto_col_f.button("Auto Max Fwd", use_container_width=True):
+            st.session_state[keys["force_auto_peak_fwd"]] = True
+            st.rerun()
+        if auto_col_b.button("Auto Max Bwd", use_container_width=True):
+            st.session_state[keys["force_auto_peak_bwd"]] = True
+            st.rerun()
+
         # ====================================================
         # Manual removal controls
         # ====================================================
@@ -576,10 +609,12 @@ if uploaded_file:
             if source_idx not in removed:
                 removed.append(source_idx)
                 st.session_state[keys["removed_fwd"]] = removed
+            st.session_state[keys["force_auto_peak_fwd"]] = True
             st.rerun()
 
         if fcol2.button("Reset Fwd", use_container_width=True):
             st.session_state[keys["removed_fwd"]] = []
+            st.session_state[keys["force_auto_peak_fwd"]] = True
             st.rerun()
 
         selected_b_vg = render_discrete_vg_control(
@@ -604,16 +639,56 @@ if uploaded_file:
             if source_idx not in removed:
                 removed.append(source_idx)
                 st.session_state[keys["removed_bwd"]] = removed
+            st.session_state[keys["force_auto_peak_bwd"]] = True
             st.rerun()
 
         if bcol2.button("Reset Bwd", use_container_width=True):
             st.session_state[keys["removed_bwd"]] = []
+            st.session_state[keys["force_auto_peak_bwd"]] = True
             st.rerun()
 
         removed_f_count = len(st.session_state[keys["removed_fwd"]])
         removed_b_count = len(st.session_state[keys["removed_bwd"]])
         st.sidebar.caption(
             f"Removed: Forward {removed_f_count} · Backward {removed_b_count}"
+        )
+
+        # ====================================================
+        # Transfer curve point inspection
+        # ====================================================
+        st.sidebar.markdown("---")
+        st.sidebar.header("Transfer Current Point")
+        st.sidebar.caption(
+            "실제 측정 Vg 한 칸씩 이동하며 |DrainI|/Width를 확인합니다."
+        )
+
+        current_f_vg = render_discrete_vg_control(
+            title="Forward transfer Vg",
+            slider_label="Forward transfer Vg",
+            state_key=keys["current_slider_fwd"],
+            active_df=fwd,
+            default_value=float(fwd["GateV"].iloc[0]),
+            button_prefix=f"current_f_{file_id}_{selected_sheet}_{operating_mode}",
+        )
+        current_b_vg = render_discrete_vg_control(
+            title="Backward transfer Vg",
+            slider_label="Backward transfer Vg",
+            state_key=keys["current_slider_bwd"],
+            active_df=bwd,
+            default_value=float(bwd["GateV"].iloc[0]),
+            button_prefix=f"current_b_{file_id}_{selected_sheet}_{operating_mode}",
+        )
+
+        current_f_idx, current_f_row, current_f_density = current_density_at_vg(
+            fwd, current_f_vg, W
+        )
+        current_b_idx, current_b_row, current_b_density = current_density_at_vg(
+            bwd, current_b_vg, W
+        )
+
+        st.sidebar.caption(
+            f"Fwd: {current_f_density:.2E} A/μm · "
+            f"Bwd: {current_b_density:.2E} A/μm"
         )
 
         # ====================================================
@@ -642,9 +717,16 @@ if uploaded_file:
         st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
         o1, o2, o3, o4 = st.columns(4)
         o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-        o2.markdown(make_card("ON Current / Width", f"{params['on_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o3.markdown(make_card("OFF Current / Width", f"{params['off_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
+        o2.markdown(make_card("ON Current / Width", f"{params['on_density']:.2E} A/μm", "#5B5F97"), unsafe_allow_html=True)
+        o3.markdown(make_card("OFF Current / Width", f"{params['off_density']:.2E} A/μm", "#5B5F97"), unsafe_allow_html=True)
         o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
+
+        st.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
+        c2.markdown(make_card("Forward |Id| / W", f"{current_f_density:.2E} A/μm", "#2E60AB"), unsafe_allow_html=True)
+        c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
+        c4.markdown(make_card("Backward |Id| / W", f"{current_b_density:.2E} A/μm", "#F05650"), unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -719,6 +801,25 @@ if uploaded_file:
             x=vg_bwd, y=np.abs(id_bwd),
             name="Backward", line=dict(color=color_bwd),
         ), row=1, col=2)
+
+        # 선택한 transfer-current 지점을 log/linear transfer plot에 표시
+        for row_num, col_num in ((1, 1), (1, 2)):
+            fig.add_trace(go.Scatter(
+                x=[float(current_f_row["GateV"])],
+                y=[abs(float(current_f_row["DrainI_active"]))],
+                mode="markers",
+                marker=dict(symbol="circle-open", size=11, color="black", line=dict(width=2)),
+                name="Fwd current target",
+                showlegend=False,
+            ), row=row_num, col=col_num)
+            fig.add_trace(go.Scatter(
+                x=[float(current_b_row["GateV"])],
+                y=[abs(float(current_b_row["DrainI_active"]))],
+                mode="markers",
+                marker=dict(symbol="square-open", size=11, color="black", line=dict(width=2)),
+                name="Bwd current target",
+                showlegend=False,
+            ), row=row_num, col=col_num)
 
         # Gm
         fig.add_trace(go.Scatter(
@@ -873,6 +974,7 @@ if uploaded_file:
             pd.DataFrame({
                 "GateV_forward": vg_fwd.reset_index(drop=True),
                 "DrainI_forward_active": id_fwd.reset_index(drop=True),
+                "DrainI_over_width_forward_A_per_um": np.abs(id_fwd.reset_index(drop=True)) / W,
                 "gm_forward_active": pd.Series(res["gm_fwd"]),
                 "mobility_forward_active": pd.Series(res["mu_fwd"]),
                 "source_index_forward": fwd["__source_index"].reset_index(drop=True),
@@ -880,6 +982,7 @@ if uploaded_file:
             pd.DataFrame({
                 "GateV_backward": vg_bwd.reset_index(drop=True),
                 "DrainI_backward_active": id_bwd.reset_index(drop=True),
+                "DrainI_over_width_backward_A_per_um": np.abs(id_bwd.reset_index(drop=True)) / W,
                 "gm_backward_active": pd.Series(res["gm_bwd"]),
                 "mobility_backward_active": pd.Series(res["mu_bwd"]),
                 "source_index_backward": bwd["__source_index"].reset_index(drop=True),
