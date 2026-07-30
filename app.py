@@ -1005,7 +1005,20 @@ if st.session_state.get("restore_pending") and st.session_state.get("restored_fi
 
 with main_content:
     if uploaded_file:
-        file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+        file_name = getattr(uploaded_file, "name", "uploaded.xlsx")
+        file_size = getattr(uploaded_file, "size", None)
+        if file_size is None:
+            try:
+                current_pos = uploaded_file.tell()
+                uploaded_file.seek(0, 2)
+                file_size = uploaded_file.tell()
+                uploaded_file.seek(current_pos)
+            except Exception:
+                try:
+                    file_size = len(uploaded_file.getvalue())
+                except Exception:
+                    file_size = 0
+        file_id = f"{file_name}_{file_size}"
         xls = pd.ExcelFile(uploaded_file)
         target_sheets = [
             s for s in xls.sheet_names
@@ -1298,349 +1311,284 @@ with main_content:
             )
 
             # ====================================================
-            # Parameters: active values only
+            # Central analysis layout: parameters left, plots right
             # ====================================================
-            st.markdown(
-                f"<h3 style='color:#333;'>📊 Data Sheet: {selected_sheet} "
-                f"({operating_mode})</h3>",
-                unsafe_allow_html=True,
-            )
+            parameter_panel, plot_panel = st.columns([1.05, 1.55], gap="large")
 
-            st.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
-            f1, f2, f3, f4 = st.columns(4)
-            f1.markdown(make_card("Peak Mobility", f"{params['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-            f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-            f3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_fwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
-            f4.markdown(make_card("SS", f"{params['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+            with parameter_panel:
+                parameter_panel.markdown(
+                    f"<h3 style='color:#333;'>📊 Data Sheet: {selected_sheet} "
+                    f"({operating_mode})</h3>",
+                    unsafe_allow_html=True,
+                )
 
-            st.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
-            b1, b2, b3, b4 = st.columns(4)
-            b1.markdown(make_card("Peak Mobility", f"{params['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-            b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-            b3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_bwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
-            b4.markdown(make_card("SS", f"{params['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+                parameter_panel.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
+                f1, f2, f3, f4 = parameter_panel.columns(4)
+                f1.markdown(make_card("Peak Mobility", f"{params['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+                f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+                f3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_fwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
+                f4.markdown(make_card("SS", f"{params['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
 
-            st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
-            o1, o2, o3, o4 = st.columns(4)
-            o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-            o2.markdown(make_card("ON Current / Width", f"{sci(params['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-            o3.markdown(make_card("OFF Current / Width", f"{sci(params['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-            o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
+                parameter_panel.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
+                b1, b2, b3, b4 = parameter_panel.columns(4)
+                b1.markdown(make_card("Peak Mobility", f"{params['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+                b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+                b3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_bwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
+                b4.markdown(make_card("SS", f"{params['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
 
-            st.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
-            c2.markdown(make_card("Forward |Id| / W", f"{sci(current_f_density)} A/μm", "#2E60AB"), unsafe_allow_html=True)
-            c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
-            c4.markdown(make_card("Backward |Id| / W", f"{sci(current_b_density)} A/μm", "#F05650"), unsafe_allow_html=True)
+                parameter_panel.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
+                o1, o2, o3, o4 = parameter_panel.columns(4)
+                o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
+                o2.markdown(make_card("ON Current / Width", f"{sci(params['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+                o3.markdown(make_card("OFF Current / Width", f"{sci(params['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+                o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
 
-            # ====================================================
-            # Save current result to selected folder
-            # ====================================================
-            st.markdown("<h4>Save Analysis Result</h4>", unsafe_allow_html=True)
-            save_col1, save_col2 = st.columns([3, 1])
+                parameter_panel.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
+                c1, c2, c3, c4 = parameter_panel.columns(4)
+                c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
+                c2.markdown(make_card("Forward |Id| / W", f"{sci(current_f_density)} A/μm", "#2E60AB"), unsafe_allow_html=True)
+                c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
+                c4.markdown(make_card("Backward |Id| / W", f"{sci(current_b_density)} A/μm", "#F05650"), unsafe_allow_html=True)
 
-            current_project = st.session_state.get("active_log_folder")
-            if current_project:
-                save_col1.info(f"Current project: {current_project}")
-            else:
-                save_col1.warning("왼쪽 Projects에서 프로젝트를 먼저 생성하세요.")
+                # ====================================================
+                # Save current result to selected folder
+                # ====================================================
+                parameter_panel.markdown("<h4>Save Analysis Result</h4>", unsafe_allow_html=True)
+                save_col1, save_col2 = parameter_panel.columns([3, 1])
 
-            if save_col2.button(
-                "Add to Project",
-                use_container_width=True,
-                disabled=current_project is None,
-            ):
-                # Store file bytes and exact analysis selections for click-to-restore.
-                try:
-                    uploaded_file.seek(0)
-                    saved_file_bytes = uploaded_file.read()
-                    uploaded_file.seek(0)
-                except Exception:
-                    saved_file_bytes = None
+                current_project = st.session_state.get("active_log_folder")
+                if current_project:
+                    save_col1.info(f"Current project: {current_project}")
+                else:
+                    save_col1.warning("왼쪽 Projects에서 프로젝트를 먼저 생성하세요.")
 
-                log_entry = {
-                    "_log_id": str(uuid.uuid4()),
-                    "_file_bytes": saved_file_bytes,
-                    "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
-                    "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
-                    "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "File": uploaded_file.name,
-                    "Sheet": selected_sheet,
-                    "Operating mode": operating_mode,
-                    "Width (μm)": float(W),
-                    "Length (μm)": float(L),
-                    "Cox (nF/cm²)": float(Cox_nf),
-                    "Drain voltage (V)": float(res["vd"]),
-                    "Gate voltage range": (
-                        f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
-                        f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+                if save_col2.button(
+                    "Add to Project",
+                    use_container_width=True,
+                    disabled=current_project is None,
+                ):
+                    # Store file bytes and exact analysis selections for click-to-restore.
+                    try:
+                        uploaded_file.seek(0)
+                        saved_file_bytes = uploaded_file.read()
+                        uploaded_file.seek(0)
+                    except Exception:
+                        saved_file_bytes = None
+
+                    log_entry = {
+                        "_log_id": str(uuid.uuid4()),
+                        "_file_bytes": saved_file_bytes,
+                        "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
+                        "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
+                        "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "File": uploaded_file.name,
+                        "Sheet": selected_sheet,
+                        "Operating mode": operating_mode,
+                        "Width (μm)": float(W),
+                        "Length (μm)": float(L),
+                        "Cox (nF/cm²)": float(Cox_nf),
+                        "Drain voltage (V)": float(res["vd"]),
+                        "Gate voltage range": (
+                            f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
+                            f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+                        ),
+                        "Gate voltage step (V)": float(
+                            np.median(np.abs(np.diff(fwd["GateV"])))
+                        ) if len(fwd) > 1 else np.nan,
+                        "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
+                        "Forward Vth (V)": float(params["vth_fwd"]),
+                        "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
+                        "Forward SS (mV/dec)": float(params["ss_fwd"]),
+                        "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
+                        "Backward Vth (V)": float(params["vth_bwd"]),
+                        "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
+                        "Backward SS (mV/dec)": float(params["ss_bwd"]),
+                        "Hysteresis (V)": float(params["hysteresis"]),
+                        "ON/OFF ratio": float(params["onoff"]),
+                        "ON current / Width (A/μm)": float(params["on_density"]),
+                        "OFF current / Width (A/μm)": float(params["off_density"]),
+                        "Selected Forward Vg (V)": float(current_f_row["GateV"]),
+                        "Selected Forward |Id| / W (A/μm)": float(current_f_density),
+                        "Selected Backward Vg (V)": float(current_b_row["GateV"]),
+                        "Selected Backward |Id| / W (A/μm)": float(current_b_density),
+                        "Removed Forward points": int(removed_f_count),
+                        "Removed Backward points": int(removed_b_count),
+                    }
+                    st.session_state["analysis_log_folders"][current_project].append(log_entry)
+                    st.session_state["active_log_folder"] = current_project
+                    parameter_panel.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
+                    st.rerun()
+
+
+            with plot_panel:
+
+                graph_mobility_title = (
+                    "Linear Mobility"
+                    if operating_mode == "Linear"
+                    else "Saturation Mobility"
+                )
+
+                fig = make_subplots(
+                    rows=3,
+                    cols=1,
+                    subplot_titles=(
+                        "Transfer (Log Scale)",
+                        "Transfer (Linear Scale)",
+                        graph_mobility_title,
                     ),
-                    "Gate voltage step (V)": float(
-                        np.median(np.abs(np.diff(fwd["GateV"])))
-                    ) if len(fwd) > 1 else np.nan,
-                    "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
-                    "Forward Vth (V)": float(params["vth_fwd"]),
-                    "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
-                    "Forward SS (mV/dec)": float(params["ss_fwd"]),
-                    "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
-                    "Backward Vth (V)": float(params["vth_bwd"]),
-                    "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
-                    "Backward SS (mV/dec)": float(params["ss_bwd"]),
-                    "Hysteresis (V)": float(params["hysteresis"]),
-                    "ON/OFF ratio": float(params["onoff"]),
-                    "ON current / Width (A/μm)": float(params["on_density"]),
-                    "OFF current / Width (A/μm)": float(params["off_density"]),
-                    "Selected Forward Vg (V)": float(current_f_row["GateV"]),
-                    "Selected Forward |Id| / W (A/μm)": float(current_f_density),
-                    "Selected Backward Vg (V)": float(current_b_row["GateV"]),
-                    "Selected Backward |Id| / W (A/μm)": float(current_b_density),
-                    "Removed Forward points": int(removed_f_count),
-                    "Removed Backward points": int(removed_b_count),
-                }
-                st.session_state["analysis_log_folders"][current_project].append(log_entry)
-                st.session_state["active_log_folder"] = current_project
-                st.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
-                st.rerun()
-
-            st.markdown("---")
-
-            # ====================================================
-            # Plot: active data only
-            # ====================================================
-            graph3_title = (
-                "3. Transconductance (Gₘ)"
-                if operating_mode == "Linear"
-                else "3. d(√I<sub>D</sub>)/dV<sub>G</sub>"
-            )
-            graph4_title = (
-                "4. Linear Mobility"
-                if operating_mode == "Linear"
-                else "4. Saturation Mobility"
-            )
-
-            fig = make_subplots(
-                rows=2,
-                cols=2,
-                subplot_titles=(
-                    "1. Transfer (Log Scale)",
-                    "2. Transfer (Linear Scale)",
-                    graph3_title,
-                    graph4_title,
-                ),
-                horizontal_spacing=0.25,
-                vertical_spacing=0.25,
-            )
-
-            color_fwd = "blue"
-            color_bwd = "red"
-
-            vg_fwd = fwd["GateV"]
-            id_fwd = fwd["DrainI_active"]
-            vg_bwd = bwd["GateV"]
-            id_bwd = bwd["DrainI_active"]
-
-            # Transfer log
-            fig.add_trace(go.Scatter(
-                x=vg_fwd, y=np.abs(id_fwd),
-                name="Forward", line=dict(color=color_fwd),
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=vg_bwd, y=np.abs(id_bwd),
-                name="Backward", line=dict(color=color_bwd),
-            ), row=1, col=1)
-
-            # Gate leakage only in raw mode because manually removed rows no longer align
-            if "GateI" in df.columns and removed_f_count == 0 and removed_b_count == 0:
-                ig = pd.to_numeric(df["GateI"], errors="coerce")
-                turning = len(res["fwd_raw"]) - 1
-                ig_f = ig.iloc[:turning + 1].reset_index(drop=True)
-                ig_b = ig.iloc[turning:].reset_index(drop=True)
-                fig.add_trace(go.Scatter(
-                    x=res["fwd_raw"]["GateV"], y=np.abs(ig_f),
-                    name="Ig (Fwd)", line=dict(color="dimgray", dash="dot"),
-                    showlegend=False,
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=res["bwd_raw"]["GateV"], y=np.abs(ig_b),
-                    name="Ig (Bwd)", line=dict(color="dimgray", dash="dot"),
-                    showlegend=False,
-                ), row=1, col=1)
-
-            # Transfer linear
-            fig.add_trace(go.Scatter(
-                x=vg_fwd, y=np.abs(id_fwd),
-                name="Forward", line=dict(color=color_fwd),
-            ), row=1, col=2)
-            fig.add_trace(go.Scatter(
-                x=vg_bwd, y=np.abs(id_bwd),
-                name="Backward", line=dict(color=color_bwd),
-            ), row=1, col=2)
-
-            # 선택한 transfer-current 지점을 log/linear transfer plot에 표시
-            for row_num, col_num in ((1, 1), (1, 2)):
-                fig.add_trace(go.Scatter(
-                    x=[float(current_f_row["GateV"])],
-                    y=[abs(float(current_f_row["DrainI_active"]))],
-                    mode="markers",
-                    marker=dict(symbol="circle-open", size=11, color="black", line=dict(width=2)),
-                    name="Fwd current target",
-                    showlegend=False,
-                ), row=row_num, col=col_num)
-                fig.add_trace(go.Scatter(
-                    x=[float(current_b_row["GateV"])],
-                    y=[abs(float(current_b_row["DrainI_active"]))],
-                    mode="markers",
-                    marker=dict(symbol="square-open", size=11, color="black", line=dict(width=2)),
-                    name="Bwd current target",
-                    showlegend=False,
-                ), row=row_num, col=col_num)
-
-            # Gm
-            fig.add_trace(go.Scatter(
-                x=vg_fwd, y=np.abs(res["gm_fwd"]),
-                name="Forward", line=dict(color=color_fwd),
-            ), row=2, col=1)
-            fig.add_trace(go.Scatter(
-                x=vg_bwd, y=np.abs(res["gm_bwd"]),
-                name="Backward", line=dict(color=color_bwd),
-            ), row=2, col=1)
-
-            # Mobility
-            fig.add_trace(go.Scatter(
-                x=vg_fwd, y=res["mu_fwd"],
-                name="Forward", line=dict(color=color_fwd),
-            ), row=2, col=2)
-            fig.add_trace(go.Scatter(
-                x=vg_bwd, y=res["mu_bwd"],
-                name="Backward", line=dict(color=color_bwd),
-            ), row=2, col=2)
-
-            # Removal candidates shown only on mobility plot
-            fig.add_trace(go.Scatter(
-                x=[float(selected_f_row["GateV"])],
-                y=[selected_f_mu],
-                mode="markers",
-                name="Fwd removal target",
-                marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
-                showlegend=False,
-            ), row=2, col=2)
-
-            fig.add_trace(go.Scatter(
-                x=[float(selected_b_row["GateV"])],
-                y=[selected_b_mu],
-                mode="markers",
-                name="Bwd removal target",
-                marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
-                showlegend=False,
-            ), row=2, col=2)
-
-            # Automatically re-detected mobility maxima
-            peak_f_vg = params["peak_vg_fwd"]
-            peak_b_vg = params["peak_vg_bwd"]
-
-            for col in (1, 2):
-                fig.add_vline(
-                    x=peak_f_vg,
-                    line_width=1.5,
-                    line_dash="dash",
-                    line_color=color_fwd,
-                    row=2,
-                    col=col,
-                )
-                fig.add_vline(
-                    x=peak_b_vg,
-                    line_width=1.5,
-                    line_dash="dash",
-                    line_color=color_bwd,
-                    row=2,
-                    col=col,
+                    vertical_spacing=0.12,
                 )
 
-            vd_formatted = f"{res['vd']:.2f}".rstrip("0").rstrip(".")
-            fig.add_annotation(
-                x=0.001,
-                y=0.001,
-                xref="x domain",
-                yref="y domain",
-                text=f"<b>V<sub>D</sub> = {vd_formatted} V</b>",
-                showarrow=False,
-                font=dict(size=12, color="black"),
-                row=1,
-                col=1,
-            )
+                color_fwd = "blue"
+                color_bwd = "red"
 
-            common_axis = dict(
-                ticks="outside",
-                tickwidth=1.5,
-                tickcolor="black",
-                ticklen=8,
-                showline=True,
-                linewidth=1.5,
-                linecolor="black",
-                mirror=True,
-                showgrid=True,
-                gridwidth=1,
-                gridcolor="lightgray",
-                griddash="dot",
-                zeroline=False,
-                title_font=dict(size=20),
-                tickfont=dict(size=14),
-            )
+                vg_fwd = fwd["GateV"]
+                id_fwd = fwd["DrainI_active"]
+                vg_bwd = bwd["GateV"]
+                id_bwd = bwd["DrainI_active"]
 
-            vg_all = pd.concat([vg_fwd, vg_bwd])
-            vg_range = abs(vg_all.max() - vg_all.min())
-            dynamic_dtick = 2.5 if vg_range <= 10 else 10
+                # Transfer log
+                fig.add_trace(go.Scatter(
+                    x=vg_fwd, y=np.abs(id_fwd),
+                    name="Forward", line=dict(color=color_fwd),
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=vg_bwd, y=np.abs(id_bwd),
+                    name="Backward", line=dict(color=color_bwd),
+                ), row=1, col=1)
 
-            y3 = (
-                "Gₘ (S)"
-                if operating_mode == "Linear"
-                else "d(√I<sub>D</sub>)/dV<sub>G</sub> (A<sup>0.5</sup>/V)"
-            )
-            y4 = (
-                "Linear Mobility (cm²/V·s)"
-                if operating_mode == "Linear"
-                else "Saturation Mobility (cm²/V·s)"
-            )
+                if "GateI" in df.columns and removed_f_count == 0 and removed_b_count == 0:
+                    ig = pd.to_numeric(df["GateI"], errors="coerce")
+                    turning = len(res["fwd_raw"]) - 1
+                    ig_f = ig.iloc[:turning + 1].reset_index(drop=True)
+                    ig_b = ig.iloc[turning:].reset_index(drop=True)
+                    fig.add_trace(go.Scatter(
+                        x=res["fwd_raw"]["GateV"], y=np.abs(ig_f),
+                        name="Ig (Fwd)", line=dict(color="dimgray", dash="dot"),
+                        showlegend=False,
+                    ), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=res["bwd_raw"]["GateV"], y=np.abs(ig_b),
+                        name="Ig (Bwd)", line=dict(color="dimgray", dash="dot"),
+                        showlegend=False,
+                    ), row=1, col=1)
 
-            fig.update_xaxes(
-                title_text="Gate Voltage (V)",
-                dtick=dynamic_dtick,
-                **common_axis,
-            )
-            fig.update_yaxes(**common_axis)
-            fig.update_yaxes(
-                title_text="Drain Current (A)",
-                type="log",
-                row=1,
-                col=1,
-            )
-            fig.update_yaxes(
-                title_text="Drain Current (A)",
-                row=1,
-                col=2,
-            )
-            fig.update_yaxes(
-                title_text=y3,
-                row=2,
-                col=1,
-            )
-            fig.update_yaxes(
-                title_text=y4,
-                row=2,
-                col=2,
-            )
+                # Transfer linear
+                fig.add_trace(go.Scatter(
+                    x=vg_fwd, y=np.abs(id_fwd),
+                    name="Forward", line=dict(color=color_fwd),
+                    showlegend=False,
+                ), row=2, col=1)
+                fig.add_trace(go.Scatter(
+                    x=vg_bwd, y=np.abs(id_bwd),
+                    name="Backward", line=dict(color=color_bwd),
+                    showlegend=False,
+                ), row=2, col=1)
 
-            fig.update_layout(
-                width=1000,
-                height=1000,
-                autosize=False,
-                template="plotly_white",
-                margin=dict(t=120, b=80, l=100, r=100),
-            )
-            fig.update_annotations(font_size=20)
+                # Selected transfer points
+                for row_num in (1, 2):
+                    fig.add_trace(go.Scatter(
+                        x=[float(current_f_row["GateV"])],
+                        y=[abs(float(current_f_row["DrainI_active"]))],
+                        mode="markers",
+                        marker=dict(
+                            symbol="circle-open", size=11, color="black",
+                            line=dict(width=2)
+                        ),
+                        showlegend=False,
+                    ), row=row_num, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=[float(current_b_row["GateV"])],
+                        y=[abs(float(current_b_row["DrainI_active"]))],
+                        mode="markers",
+                        marker=dict(
+                            symbol="square-open", size=11, color="black",
+                            line=dict(width=2)
+                        ),
+                        showlegend=False,
+                    ), row=row_num, col=1)
 
-            st.plotly_chart(fig, use_container_width=False)
+                # Mobility only — conductance plot removed
+                fig.add_trace(go.Scatter(
+                    x=vg_fwd, y=res["mu_fwd"],
+                    name="Forward mobility", line=dict(color=color_fwd),
+                    showlegend=False,
+                ), row=3, col=1)
+                fig.add_trace(go.Scatter(
+                    x=vg_bwd, y=res["mu_bwd"],
+                    name="Backward mobility", line=dict(color=color_bwd),
+                    showlegend=False,
+                ), row=3, col=1)
+
+                fig.add_trace(go.Scatter(
+                    x=[float(selected_f_row["GateV"])],
+                    y=[selected_f_mu],
+                    mode="markers",
+                    marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
+                    showlegend=False,
+                ), row=3, col=1)
+                fig.add_trace(go.Scatter(
+                    x=[float(selected_b_row["GateV"])],
+                    y=[selected_b_mu],
+                    mode="markers",
+                    marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
+                    showlegend=False,
+                ), row=3, col=1)
+
+                peak_f_vg = params["peak_vg_fwd"]
+                peak_b_vg = params["peak_vg_bwd"]
+                fig.add_vline(
+                    x=peak_f_vg, line_width=1.5, line_dash="dash",
+                    line_color=color_fwd, row=3, col=1
+                )
+                fig.add_vline(
+                    x=peak_b_vg, line_width=1.5, line_dash="dash",
+                    line_color=color_bwd, row=3, col=1
+                )
+
+                vd_formatted = f"{res['vd']:.2f}".rstrip("0").rstrip(".")
+                fig.add_annotation(
+                    x=0.01, y=0.02, xref="x domain", yref="y domain",
+                    text=f"<b>V<sub>D</sub> = {vd_formatted} V</b>",
+                    showarrow=False, font=dict(size=12, color="black"),
+                    row=1, col=1,
+                )
+
+                common_axis = dict(
+                    ticks="outside", tickwidth=1.5, tickcolor="black", ticklen=7,
+                    showline=True, linewidth=1.5, linecolor="black", mirror=True,
+                    showgrid=True, gridwidth=1, gridcolor="lightgray",
+                    griddash="dot", zeroline=False,
+                    title_font=dict(size=16), tickfont=dict(size=12),
+                )
+
+                vg_all = pd.concat([vg_fwd, vg_bwd])
+                vg_range = abs(vg_all.max() - vg_all.min())
+                dynamic_dtick = 2.5 if vg_range <= 10 else 10
+
+                fig.update_xaxes(
+                    title_text="Gate Voltage (V)", dtick=dynamic_dtick, **common_axis
+                )
+                fig.update_yaxes(**common_axis)
+                fig.update_yaxes(
+                    title_text="Drain Current (A)", type="log", row=1, col=1
+                )
+                fig.update_yaxes(
+                    title_text="Drain Current (A)", row=2, col=1
+                )
+                fig.update_yaxes(
+                    title_text=f"{graph_mobility_title} (cm²/V·s)", row=3, col=1
+                )
+
+                fig.update_layout(
+                    height=1050,
+                    autosize=True,
+                    template="plotly_white",
+                    margin=dict(t=80, b=60, l=75, r=25),
+                    legend=dict(orientation="h", y=1.04, x=0),
+                )
+                fig.update_annotations(font_size=16)
+                plot_panel.plotly_chart(fig, use_container_width=True)
 
             # ====================================================
             # Download active data
@@ -1664,7 +1612,7 @@ with main_content:
                 }),
             ], axis=1)
 
-            st.download_button(
+            plot_panel.download_button(
                 "Download active analysis (CSV)",
                 data=export_df.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"{selected_sheet}_{operating_mode}_manual_removed.csv",
