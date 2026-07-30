@@ -48,65 +48,101 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
 .device-panel {
     border: 1px solid rgba(128, 128, 128, 0.35);
     border-radius: 12px;
-    padding: 9px 12px 5px 12px;
-    margin-bottom: 6px;
+    padding: 4px 8px 2px 8px;
+    margin-bottom: 2px;
     background: rgba(128, 128, 128, 0.06);
 }
 .device-panel-title {
-    font-size: 18px;
+    font-size: 14px;
     font-weight: 750;
     margin-bottom: 2px;
 }
 .device-panel-caption {
-    font-size: 13px;
+    font-size: 9px;
     color: #777;
-    margin-bottom: 8px;
+    margin-bottom: 1px;
 }
 
-/* Compact right control panel */
+/* Ultra-compact right control panel */
 div[data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0.45rem 0.55rem 0.55rem 0.55rem !important;
+    padding: 0.22rem 0.32rem 0.30rem 0.32rem !important;
 }
-div[data-testid="stVerticalBlockBorderWrapper"] h2 {
-    font-size: 15px !important;
-    line-height: 1.1 !important;
-    margin: 0.1rem 0 0.15rem 0 !important;
-}
+div[data-testid="stVerticalBlockBorderWrapper"] h2,
 div[data-testid="stVerticalBlockBorderWrapper"] h3 {
-    font-size: 14px !important;
-    line-height: 1.1 !important;
-    margin: 0.1rem 0 0.15rem 0 !important;
+    font-size: 11px !important;
+    line-height: 1.0 !important;
+    margin: 0.02rem 0 0.05rem 0 !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] p,
 div[data-testid="stVerticalBlockBorderWrapper"] label p {
-    font-size: 11px !important;
-    line-height: 1.15 !important;
-    margin-bottom: 0.08rem !important;
+    font-size: 9px !important;
+    line-height: 1.0 !important;
+    margin-bottom: 0 !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stCaptionContainer"] {
-    margin-top: -0.15rem !important;
-    margin-bottom: -0.15rem !important;
+    margin-top: -0.34rem !important;
+    margin-bottom: -0.34rem !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSlider"] {
-    margin-top: -0.45rem !important;
-    margin-bottom: -0.65rem !important;
+    margin-top: -0.68rem !important;
+    margin-bottom: -0.88rem !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] {
-    margin-top: -0.15rem !important;
-    margin-bottom: -0.25rem !important;
+    margin-top: -0.34rem !important;
+    margin-bottom: -0.40rem !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button {
+    min-height: 22px !important;
+    height: 22px !important;
+    padding: 0 0.20rem !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button p {
+    font-size: 9px !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] hr {
-    margin: 0.32rem 0 !important;
+    margin: 0.10rem 0 !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] {
-    margin-top: -0.2rem !important;
-    margin-bottom: -0.25rem !important;
+    margin-top: -0.42rem !important;
+    margin-bottom: -0.48rem !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] label {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
 }
 
+/* Compact Device Information widgets */
+div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
+> div[data-testid="stColumn"]:nth-child(2)
+div[data-testid="stNumberInput"] {
+    margin-top: -0.34rem !important;
+    margin-bottom: -0.48rem !important;
+}
+div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
+> div[data-testid="stColumn"]:nth-child(2)
+div[data-testid="stNumberInput"] input {
+    min-height: 27px !important;
+    height: 27px !important;
+    padding-top: 0.08rem !important;
+    padding-bottom: 0.08rem !important;
+    font-size: 10px !important;
+}
+div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
+> div[data-testid="stColumn"]:nth-child(2)
+label p {
+    font-size: 9px !important;
+    line-height: 1.0 !important;
+}
+div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
+> div[data-testid="stColumn"]:nth-child(2)
+[data-testid="stRadio"] {
+    margin-top: -0.28rem !important;
+    margin-bottom: -0.42rem !important;
+}
 /* Lift only the top-right Device Information / Analysis Controls column */
 div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
 > div[data-testid="stColumn"]:nth-child(2) {
-    transform: translateY(-58px);
+    transform: translateY(-138px);
     position: relative;
     z-index: 2;
 }
@@ -988,7 +1024,6 @@ def render_discrete_vg_control(
     options = [float(v) for v in values]
 
     ui = parent if parent is not None else st.sidebar
-    ui.markdown(f"**{title}**")
     minus_col, slider_col, plus_col = ui.columns([1, 5, 1])
 
     minus_col.button(
@@ -1076,11 +1111,6 @@ with device_col:
     )
     Cox = Cox_nf * 1e-9
 
-    st.markdown(
-        "<div style='font-size:12px; font-weight:700; margin:3px 0 2px 0;'>"
-        "Analysis Controls</div>",
-        unsafe_allow_html=True,
-    )
     # Compact control panel; no internal scrollbar.
     right_controls = st.container(border=True)
 
@@ -1292,7 +1322,7 @@ with main_content:
             # ====================================================
             # Mobility peak point
             # ====================================================
-            right_controls.markdown("### Mobility Peak Point")
+            right_controls.markdown("### Peak")
             active_peak_df = fwd if is_forward_control else bwd
             active_peak_key = (
                 keys["peak_slider_fwd"] if is_forward_control
@@ -1347,7 +1377,7 @@ with main_content:
             # Manual mobility point removal
             # ====================================================
             right_controls.markdown("---")
-            right_controls.markdown("### Manual Point Removal")
+            right_controls.markdown("### Remove")
 
             active_remove_df = fwd if is_forward_control else bwd
             active_remove_key = (
@@ -1433,7 +1463,7 @@ with main_content:
             # Transfer current point
             # ====================================================
             right_controls.markdown("---")
-            right_controls.markdown("### Transfer Current Point")
+            right_controls.markdown("### Transfer")
 
             active_current_df = fwd if is_forward_control else bwd
             active_current_key = (
@@ -1474,54 +1504,21 @@ with main_content:
 
             with parameter_panel:
                 parameter_panel.markdown(
-                    f"<h3 style='color:#333;'>📊 Data Sheet: {selected_sheet} "
-                    f"({operating_mode})</h3>",
+                    f"<h3 style='color:#333; margin:0 0 4px 0;'>"
+                    f"📊 {selected_sheet} ({operating_mode})</h3>",
                     unsafe_allow_html=True,
                 )
 
-                parameter_panel.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
-                f1, f2 = parameter_panel.columns(2)
-                f1.markdown(make_card("Peak Mobility (cm²/V·s)", f"{params['mu_fwd']:.2f}", "#2E60AB"), unsafe_allow_html=True)
-                f2.markdown(make_card("Threshold Voltage, Vₜₕ (V)", f"{params['vth_fwd']:.2f}", "#A23B72"), unsafe_allow_html=True)
-                f3, f4 = parameter_panel.columns(2)
-                f3.markdown(make_card("Peak Point, Vg (V)", f"{params['peak_vg_fwd']:.1f}", "#F18F01"), unsafe_allow_html=True)
-                f4.markdown(make_card("SS (mV/dec)", f"{params['ss_fwd']:.1f}", "#18A558"), unsafe_allow_html=True)
-
-                parameter_panel.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
-                b1, b2 = parameter_panel.columns(2)
-                b1.markdown(make_card("Peak Mobility (cm²/V·s)", f"{params['mu_bwd']:.2f}", "#2E60AB"), unsafe_allow_html=True)
-                b2.markdown(make_card("Threshold Voltage, Vₜₕ (V)", f"{params['vth_bwd']:.2f}", "#A23B72"), unsafe_allow_html=True)
-                b3, b4 = parameter_panel.columns(2)
-                b3.markdown(make_card("Peak Point, Vg (V)", f"{params['peak_vg_bwd']:.1f}", "#F18F01"), unsafe_allow_html=True)
-                b4.markdown(make_card("SS (mV/dec)", f"{params['ss_bwd']:.1f}", "#18A558"), unsafe_allow_html=True)
-
-                parameter_panel.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
-                o1, o2 = parameter_panel.columns(2)
-                o1.markdown(make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-                o2.markdown(make_card("ON Current / Width (A/μm)", sci(params['on_density']), "#5B5F97"), unsafe_allow_html=True)
-                o3, o4 = parameter_panel.columns(2)
-                o3.markdown(make_card("OFF Current / Width (A/μm)", sci(params['off_density']), "#5B5F97"), unsafe_allow_html=True)
-                o4.markdown(make_card("Hysteresis (V)", f"{params['hysteresis']:.2f}", "#5B5F97"), unsafe_allow_html=True)
-
-                parameter_panel.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
-                c1, c2 = parameter_panel.columns(2)
-                c1.markdown(make_card("Forward Vg (V)", f"{float(current_f_row['GateV']):.2f}", "#2E60AB"), unsafe_allow_html=True)
-                c2.markdown(make_card("Forward |Id| / W (A/μm)", sci(current_f_density), "#2E60AB"), unsafe_allow_html=True)
-                c3, c4 = parameter_panel.columns(2)
-                c3.markdown(make_card("Backward Vg (V)", f"{float(current_b_row['GateV']):.2f}", "#F05650"), unsafe_allow_html=True)
-                c4.markdown(make_card("Backward |Id| / W (A/μm)", sci(current_b_density), "#F05650"), unsafe_allow_html=True)
-
-                # ====================================================
                 # Save current result to selected folder
                 # ====================================================
-                parameter_panel.markdown("<h4>Save Analysis Result</h4>", unsafe_allow_html=True)
+                parameter_panel.markdown("<h4 style='margin:2px 0 3px 0;'>Save Analysis Result</h4>", unsafe_allow_html=True)
                 save_col1, save_col2 = parameter_panel.columns([3, 1])
 
                 current_project = st.session_state.get("active_log_folder")
                 if current_project:
-                    save_col1.info(f"Current project: {current_project}")
+                    save_col1.caption(f"Project: {current_project}")
                 else:
-                    save_col1.warning("왼쪽 Projects에서 프로젝트를 먼저 생성하세요.")
+                    save_col1.caption("Select a project first")
 
                 if save_col2.button(
                     "Add to Project",
@@ -1583,6 +1580,182 @@ with main_content:
                     save_projects_state()
                     parameter_panel.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
                     st.rerun()
+
+                parameter_panel.markdown(
+                    "<h4 style='margin:8px 0 3px 0;'>Overall Device Parameters</h4>",
+                    unsafe_allow_html=True,
+                )
+                o1, o2 = parameter_panel.columns(2)
+                o1.markdown(
+                    make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
+                    unsafe_allow_html=True,
+                )
+                o2.markdown(
+                    make_card(
+                        "ON Current / Width (A/μm)",
+                        sci(params["on_density"]),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                o3, o4 = parameter_panel.columns(2)
+                o3.markdown(
+                    make_card(
+                        "OFF Current / Width (A/μm)",
+                        sci(params["off_density"]),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                o4.markdown(
+                    make_card(
+                        "Hysteresis (V)",
+                        f"{params['hysteresis']:.2f}",
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+                parameter_direction_key = (
+                    f"parameter_direction_{file_id}_{selected_sheet}_{operating_mode}"
+                )
+                if parameter_direction_key not in st.session_state:
+                    st.session_state[parameter_direction_key] = "Forward"
+
+                parameter_direction = parameter_panel.radio(
+                    "Parameter sweep",
+                    ["Forward", "Reverse"],
+                    key=parameter_direction_key,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+
+                if parameter_direction == "Forward":
+                    parameter_panel.markdown(
+                        "<h4 style='color:#6FADCF; margin:5px 0 2px 0;'>"
+                        "Forward Parameters</h4>",
+                        unsafe_allow_html=True,
+                    )
+                    p1, p2 = parameter_panel.columns(2)
+                    p1.markdown(
+                        make_card(
+                            "Peak Mobility (cm²/V·s)",
+                            f"{params['mu_fwd']:.2f}",
+                            "#2E60AB",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    p2.markdown(
+                        make_card(
+                            "Threshold Voltage, Vₜₕ (V)",
+                            f"{params['vth_fwd']:.2f}",
+                            "#A23B72",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    p3, p4 = parameter_panel.columns(2)
+                    p3.markdown(
+                        make_card(
+                            "Peak Point, Vg (V)",
+                            f"{params['peak_vg_fwd']:.1f}",
+                            "#F18F01",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    p4.markdown(
+                        make_card(
+                            "SS (mV/dec)",
+                            f"{params['ss_fwd']:.1f}",
+                            "#18A558",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+                    parameter_panel.markdown(
+                        "<h4 style='color:#555; margin:5px 0 2px 0;'>"
+                        "Selected Transfer Current</h4>",
+                        unsafe_allow_html=True,
+                    )
+                    t1, t2 = parameter_panel.columns(2)
+                    t1.markdown(
+                        make_card(
+                            "Forward Vg (V)",
+                            f"{float(current_f_row['GateV']):.2f}",
+                            "#2E60AB",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    t2.markdown(
+                        make_card(
+                            "Forward |Id| / W (A/μm)",
+                            sci(current_f_density),
+                            "#2E60AB",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    parameter_panel.markdown(
+                        "<h4 style='color:#F05650; margin:5px 0 2px 0;'>"
+                        "Reverse Parameters</h4>",
+                        unsafe_allow_html=True,
+                    )
+                    p1, p2 = parameter_panel.columns(2)
+                    p1.markdown(
+                        make_card(
+                            "Peak Mobility (cm²/V·s)",
+                            f"{params['mu_bwd']:.2f}",
+                            "#2E60AB",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    p2.markdown(
+                        make_card(
+                            "Threshold Voltage, Vₜₕ (V)",
+                            f"{params['vth_bwd']:.2f}",
+                            "#A23B72",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    p3, p4 = parameter_panel.columns(2)
+                    p3.markdown(
+                        make_card(
+                            "Peak Point, Vg (V)",
+                            f"{params['peak_vg_bwd']:.1f}",
+                            "#F18F01",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    p4.markdown(
+                        make_card(
+                            "SS (mV/dec)",
+                            f"{params['ss_bwd']:.1f}",
+                            "#18A558",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+                    parameter_panel.markdown(
+                        "<h4 style='color:#555; margin:5px 0 2px 0;'>"
+                        "Selected Transfer Current</h4>",
+                        unsafe_allow_html=True,
+                    )
+                    t1, t2 = parameter_panel.columns(2)
+                    t1.markdown(
+                        make_card(
+                            "Reverse Vg (V)",
+                            f"{float(current_b_row['GateV']):.2f}",
+                            "#F05650",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    t2.markdown(
+                        make_card(
+                            "Reverse |Id| / W (A/μm)",
+                            sci(current_b_density),
+                            "#F05650",
+                        ),
+                        unsafe_allow_html=True,
+                    )
 
 
             with plot_panel:
