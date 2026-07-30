@@ -29,6 +29,190 @@ div[data-testid="stSlider"] div[role="slider"] > div {
 """, unsafe_allow_html=True)
 
 # ============================================================
+# Session log / folder helpers
+# ============================================================
+def initialize_log_state():
+    if "analysis_log_folders" not in st.session_state:
+        st.session_state["analysis_log_folders"] = {}
+    if "active_log_folder" not in st.session_state:
+        st.session_state["active_log_folder"] = None
+
+
+def create_log_folder(folder_name):
+    name = str(folder_name).strip()
+    if not name:
+        return False, "폴더 이름을 입력하세요."
+    folders = st.session_state["analysis_log_folders"]
+    if name in folders:
+        return False, "같은 이름의 폴더가 이미 있습니다."
+    folders[name] = []
+    st.session_state["active_log_folder"] = name
+    return True, f"'{name}' 폴더를 생성했습니다."
+
+
+def delete_log_entry(folder_name, entry_id):
+    folders = st.session_state["analysis_log_folders"]
+    if folder_name not in folders:
+        return
+    folders[folder_name] = [
+        item for item in folders[folder_name]
+        if item.get("_log_id") != entry_id
+    ]
+
+
+def clear_log_folder(folder_name):
+    folders = st.session_state["analysis_log_folders"]
+    if folder_name in folders:
+        folders[folder_name] = []
+
+
+def clear_all_logs():
+    folders = st.session_state["analysis_log_folders"]
+    for name in list(folders.keys()):
+        folders[name] = []
+
+
+def log_dataframe(folder_name):
+    folders = st.session_state["analysis_log_folders"]
+    records = folders.get(folder_name, [])
+    if not records:
+        return pd.DataFrame()
+
+    rows = []
+    for record in records:
+        row = {
+            key: value for key, value in record.items()
+            if not key.startswith("_")
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def folder_excel_bytes(folder_name):
+    df = log_dataframe(folder_name)
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Parameters", index=False)
+
+        # 간단한 summary 시트
+        if not df.empty:
+            numeric = df.select_dtypes(include=[np.number])
+            if not numeric.empty:
+                summary = pd.DataFrame({
+                    "Parameter": numeric.columns,
+                    "Mean": numeric.mean().values,
+                    "Std": numeric.std().values,
+                    "Min": numeric.min().values,
+                    "Max": numeric.max().values,
+                })
+                summary.to_excel(writer, sheet_name="Summary", index=False)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+def safe_excel_filename(name):
+    safe = re.sub(r'[\\/:*?"<>|]+', "_", str(name)).strip()
+    return safe or "FET_Analysis_Log"
+
+
+initialize_log_state()
+
+
+# ============================================================
+# Sidebar: Project manager
+# ============================================================
+initialize_log_state()
+
+st.sidebar.header("Projects")
+st.sidebar.caption("프로젝트를 생성하거나 선택한 뒤 분석을 진행하세요.")
+
+project_name_input = st.sidebar.text_input(
+    "New project name",
+    key="new_project_name_sidebar",
+    placeholder="예: 85K, Device batch A",
+)
+
+if st.sidebar.button("＋ Create Project", use_container_width=True):
+    ok, message = create_log_folder(project_name_input)
+    if ok:
+        st.sidebar.success(message)
+        st.rerun()
+    else:
+        st.sidebar.warning(message)
+
+project_names = list(st.session_state["analysis_log_folders"].keys())
+
+if project_names:
+    active_project = st.sidebar.radio(
+        "Project list",
+        project_names,
+        index=(
+            project_names.index(st.session_state["active_log_folder"])
+            if st.session_state.get("active_log_folder") in project_names
+            else 0
+        ),
+        key="project_radio_sidebar",
+    )
+    st.session_state["active_log_folder"] = active_project
+
+    active_logs = st.session_state["analysis_log_folders"][active_project]
+    st.sidebar.caption(f"Selected: {active_project} · {len(active_logs)} logs")
+
+    if active_logs:
+        st.sidebar.download_button(
+            "Export Project to Excel",
+            data=folder_excel_bytes(active_project),
+            file_name=f"{safe_excel_filename(active_project)}_FET_parameters.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"sidebar_export_{active_project}",
+        )
+
+        st.sidebar.markdown("**Saved logs**")
+        for log_idx, log_record in enumerate(active_logs, start=1):
+            log_name_col, log_delete_col = st.sidebar.columns([6, 1])
+            log_name_col.caption(
+                f"{log_idx}. {log_record.get('File', '')} · "
+                f"{log_record.get('Sheet', '')}"
+            )
+            if log_delete_col.button(
+                "✕",
+                key=f"sidebar_delete_{active_project}_{log_record['_log_id']}",
+                help="이 로그 삭제",
+                use_container_width=True,
+            ):
+                delete_log_entry(active_project, log_record["_log_id"])
+                st.rerun()
+    else:
+        st.sidebar.info("이 프로젝트에는 저장된 로그가 없습니다.")
+
+    project_action_1, project_action_2 = st.sidebar.columns(2)
+    if project_action_1.button(
+        "Clear Logs",
+        key=f"sidebar_clear_{active_project}",
+        use_container_width=True,
+    ):
+        clear_log_folder(active_project)
+        st.rerun()
+
+    if project_action_2.button(
+        "Delete Project",
+        key=f"sidebar_delete_project_{active_project}",
+        use_container_width=True,
+    ):
+        del st.session_state["analysis_log_folders"][active_project]
+        st.session_state["active_log_folder"] = None
+        st.rerun()
+else:
+    active_project = None
+    st.session_state["active_log_folder"] = None
+    st.sidebar.info("먼저 개인 프로젝트를 생성하세요.")
+
+st.sidebar.markdown("---")
+
+# ============================================================
 # Sidebar: device information
 # ============================================================
 st.sidebar.header("Device Information")
@@ -435,134 +619,8 @@ def render_discrete_vg_control(
 
 
 # ============================================================
-# Session log / folder helpers
-# ============================================================
-def initialize_log_state():
-    if "analysis_log_folders" not in st.session_state:
-        st.session_state["analysis_log_folders"] = {"Default": []}
-    if "active_log_folder" not in st.session_state:
-        st.session_state["active_log_folder"] = "Default"
-
-
-def create_log_folder(folder_name):
-    name = str(folder_name).strip()
-    if not name:
-        return False, "폴더 이름을 입력하세요."
-    folders = st.session_state["analysis_log_folders"]
-    if name in folders:
-        return False, "같은 이름의 폴더가 이미 있습니다."
-    folders[name] = []
-    st.session_state["active_log_folder"] = name
-    return True, f"'{name}' 폴더를 생성했습니다."
-
-
-def delete_log_entry(folder_name, entry_id):
-    folders = st.session_state["analysis_log_folders"]
-    if folder_name not in folders:
-        return
-    folders[folder_name] = [
-        item for item in folders[folder_name]
-        if item.get("_log_id") != entry_id
-    ]
-
-
-def clear_log_folder(folder_name):
-    folders = st.session_state["analysis_log_folders"]
-    if folder_name in folders:
-        folders[folder_name] = []
-
-
-def clear_all_logs():
-    folders = st.session_state["analysis_log_folders"]
-    for name in list(folders.keys()):
-        folders[name] = []
-
-
-def log_dataframe(folder_name):
-    folders = st.session_state["analysis_log_folders"]
-    records = folders.get(folder_name, [])
-    if not records:
-        return pd.DataFrame()
-
-    rows = []
-    for record in records:
-        row = {
-            key: value for key, value in record.items()
-            if not key.startswith("_")
-        }
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def folder_excel_bytes(folder_name):
-    df = log_dataframe(folder_name)
-    output = io.BytesIO()
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Parameters", index=False)
-
-        # 간단한 summary 시트
-        if not df.empty:
-            numeric = df.select_dtypes(include=[np.number])
-            if not numeric.empty:
-                summary = pd.DataFrame({
-                    "Parameter": numeric.columns,
-                    "Mean": numeric.mean().values,
-                    "Std": numeric.std().values,
-                    "Min": numeric.min().values,
-                    "Max": numeric.max().values,
-                })
-                summary.to_excel(writer, sheet_name="Summary", index=False)
-
-    output.seek(0)
-    return output.getvalue()
-
-
-def safe_excel_filename(name):
-    safe = re.sub(r'[\\/:*?"<>|]+', "_", str(name)).strip()
-    return safe or "FET_Analysis_Log"
-
-
-initialize_log_state()
-
-# ============================================================
 # Upload
 # ============================================================
-
-# ============================================================
-# Log folder manager
-# ============================================================
-with st.expander("📁 Analysis Log Folders", expanded=True):
-    folder_col1, folder_col2 = st.columns([3, 1])
-
-    new_folder_name = folder_col1.text_input(
-        "New folder name",
-        key="new_log_folder_name",
-        placeholder="예: 300K, Sample A, Device batch 1",
-    )
-
-    if folder_col2.button("Create Folder", use_container_width=True):
-        ok, message = create_log_folder(new_folder_name)
-        if ok:
-            st.success(message)
-            st.rerun()
-        else:
-            st.warning(message)
-
-    folder_names = list(st.session_state["analysis_log_folders"].keys())
-    active_folder = st.selectbox(
-        "Active log folder",
-        folder_names,
-        index=folder_names.index(
-            st.session_state.get("active_log_folder", folder_names[0])
-        ) if st.session_state.get("active_log_folder", folder_names[0]) in folder_names else 0,
-        key="active_log_folder_selector",
-    )
-    st.session_state["active_log_folder"] = active_folder
-
-    folder_count = len(st.session_state["analysis_log_folders"][active_folder])
-    st.caption(f"현재 폴더: {active_folder} · 저장된 로그: {folder_count}개")
-
 
 uploaded_file = st.file_uploader(
     "측정된 엑셀 파일을 업로드하세요",
@@ -865,17 +923,17 @@ if uploaded_file:
         st.markdown("<h4>Save Analysis Result</h4>", unsafe_allow_html=True)
         save_col1, save_col2 = st.columns([3, 1])
 
-        save_folder_names = list(st.session_state["analysis_log_folders"].keys())
-        save_folder = save_col1.selectbox(
-            "Target folder",
-            save_folder_names,
-            index=save_folder_names.index(
-                st.session_state.get("active_log_folder", save_folder_names[0])
-            ) if st.session_state.get("active_log_folder", save_folder_names[0]) in save_folder_names else 0,
-            key=f"save_folder_{file_id}_{selected_sheet}_{operating_mode}",
-        )
+        current_project = st.session_state.get("active_log_folder")
+        if current_project:
+            save_col1.info(f"Current project: {current_project}")
+        else:
+            save_col1.warning("왼쪽 Projects에서 프로젝트를 먼저 생성하세요.")
 
-        if save_col2.button("Add to Log", use_container_width=True):
+        if save_col2.button(
+            "Add to Project",
+            use_container_width=True,
+            disabled=current_project is None,
+        ):
             log_entry = {
                 "_log_id": str(uuid.uuid4()),
                 "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -905,9 +963,9 @@ if uploaded_file:
                 "Removed Forward points": int(removed_f_count),
                 "Removed Backward points": int(removed_b_count),
             }
-            st.session_state["analysis_log_folders"][save_folder].append(log_entry)
-            st.session_state["active_log_folder"] = save_folder
-            st.success(f"'{save_folder}' 폴더에 로그를 저장했습니다.")
+            st.session_state["analysis_log_folders"][current_project].append(log_entry)
+            st.session_state["active_log_folder"] = current_project
+            st.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
             st.rerun()
 
         st.markdown("---")
@@ -1178,80 +1236,3 @@ if uploaded_file:
             mime="text/csv",
         )
 
-# ============================================================
-# Folder log viewer and export
-# ============================================================
-st.markdown("---")
-st.header("📚 Saved Analysis Logs")
-
-folders = st.session_state["analysis_log_folders"]
-
-top_clear_col1, top_clear_col2 = st.columns([3, 1])
-top_clear_col1.caption(
-    "로그는 현재 Streamlit 세션에 저장됩니다. 브라우저 세션이 종료되거나 앱이 재시작되면 초기화될 수 있습니다."
-)
-if top_clear_col2.button("Clear All Logs", use_container_width=True):
-    clear_all_logs()
-    st.rerun()
-
-for folder_name, records in folders.items():
-    with st.expander(f"📁 {folder_name} ({len(records)} logs)", expanded=False):
-        action_col1, action_col2, action_col3 = st.columns([2, 1, 1])
-
-        if records:
-            excel_bytes = folder_excel_bytes(folder_name)
-            action_col1.download_button(
-                "Export Folder to Excel",
-                data=excel_bytes,
-                file_name=f"{safe_excel_filename(folder_name)}_FET_parameters.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key=f"export_folder_{folder_name}",
-            )
-        else:
-            action_col1.info("저장된 로그가 없습니다.")
-
-        if action_col2.button(
-            "Clear Folder",
-            key=f"clear_folder_{folder_name}",
-            use_container_width=True,
-        ):
-            clear_log_folder(folder_name)
-            st.rerun()
-
-        # Default 폴더 외에는 빈 폴더 삭제도 허용
-        if folder_name != "Default":
-            if action_col3.button(
-                "Delete Folder",
-                key=f"delete_folder_{folder_name}",
-                use_container_width=True,
-            ):
-                del st.session_state["analysis_log_folders"][folder_name]
-                if st.session_state.get("active_log_folder") == folder_name:
-                    st.session_state["active_log_folder"] = "Default"
-                st.rerun()
-
-        if records:
-            for idx, record in enumerate(records, start=1):
-                row_col1, row_col2 = st.columns([12, 1])
-
-                row_col1.markdown(
-                    f"**{idx}. {record.get('File', '')}** · "
-                    f"{record.get('Sheet', '')} · "
-                    f"{record.get('Operating mode', '')} · "
-                    f"μF={record.get('Forward mobility (cm²/V·s)', np.nan):.3g}, "
-                    f"μB={record.get('Backward mobility (cm²/V·s)', np.nan):.3g} · "
-                    f"{record.get('Saved at', '')}"
-                )
-
-                if row_col2.button(
-                    "✕",
-                    key=f"delete_log_{folder_name}_{record['_log_id']}",
-                    help="이 로그 삭제",
-                    use_container_width=True,
-                ):
-                    delete_log_entry(folder_name, record["_log_id"])
-                    st.rerun()
-
-            preview_df = log_dataframe(folder_name)
-            st.dataframe(preview_df, use_container_width=True, hide_index=True)
