@@ -30,6 +30,39 @@ div[data-testid="stSlider"] div[role="slider"] > div {
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+/* Project radio labels */
+section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+    font-size: 17px !important;
+    font-weight: 700 !important;
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] label {
+    padding-top: 0.35rem !important;
+    padding-bottom: 0.35rem !important;
+}
+
+/* Right-side device information panel */
+.device-panel {
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    border-radius: 12px;
+    padding: 14px 16px 8px 16px;
+    margin-bottom: 12px;
+    background: rgba(128, 128, 128, 0.06);
+}
+.device-panel-title {
+    font-size: 21px;
+    font-weight: 750;
+    margin-bottom: 2px;
+}
+.device-panel-caption {
+    font-size: 13px;
+    color: #777;
+    margin-bottom: 8px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ============================================================
 # Session log / folder helpers
 # ============================================================
@@ -202,16 +235,19 @@ if st.sidebar.button("＋ Create Project", use_container_width=True):
 project_names = list(st.session_state["analysis_log_folders"].keys())
 
 if project_names:
-    active_project = st.sidebar.radio(
+    project_display_names = [f"📁  {name}" for name in project_names]
+    selected_display = st.sidebar.radio(
         "Project list",
-        project_names,
+        project_display_names,
         index=(
             project_names.index(st.session_state["active_log_folder"])
             if st.session_state.get("active_log_folder") in project_names
             else 0
         ),
         key="project_radio_sidebar",
+        label_visibility="collapsed",
     )
+    active_project = project_names[project_display_names.index(selected_display)]
     st.session_state["active_log_folder"] = active_project
 
     active_logs = st.session_state["analysis_log_folders"][active_project]
@@ -232,7 +268,7 @@ if project_names:
             log_name_col, log_delete_col = st.sidebar.columns([6, 1])
 
             if log_name_col.button(
-                f"{log_idx}. {log_record.get('File', '')} · {log_record.get('Sheet', '')}",
+                f"📄 {log_idx}. {log_record.get('File', '')} · {log_record.get('Sheet', '')}",
                 key=f"open_log_{active_project}_{log_record['_log_id']}",
                 use_container_width=True,
                 help="저장 당시 분석 상태로 열기",
@@ -276,36 +312,24 @@ else:
 st.sidebar.markdown("---")
 
 # ============================================================
-# Sidebar: device information
+# Device information state
 # ============================================================
-st.sidebar.header("Device Information")
 restored_mode = st.session_state.get("restored_operating_mode")
-mode_index = 1 if restored_mode == "Saturation" else 0
-operating_mode = st.sidebar.radio(
-    "Operating Mode",
-    ["Linear", "Saturation"],
-    index=mode_index,
-    key="operating_mode_widget",
-)
-st.sidebar.markdown("---")
+if "operating_mode_widget" not in st.session_state:
+    st.session_state["operating_mode_widget"] = (
+        restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
+    )
+if "width_widget" not in st.session_state:
+    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1000.0)
+if "length_widget" not in st.session_state:
+    st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
+if "cox_widget" not in st.session_state:
+    st.session_state["cox_widget"] = float(st.session_state.get("restored_Cox_nf") or 34.5)
 
-W = st.sidebar.number_input(
-    "Width (μm)",
-    value=float(st.session_state.get("restored_W") or 1000.0),
-    step=50.0,
-    key="width_widget",
-)
-L = st.sidebar.number_input(
-    "Length (μm)",
-    value=float(st.session_state.get("restored_L") or 100.0),
-    step=50.0,
-    key="length_widget",
-)
-Cox_nf = st.sidebar.number_input(
-    "Capacitance (nF/cm⁻²)",
-    value=float(st.session_state.get("restored_Cox_nf") or 34.5),
-    key="cox_widget",
-)
+operating_mode = st.session_state["operating_mode_widget"]
+W = float(st.session_state["width_widget"])
+L = float(st.session_state["length_widget"])
+Cox_nf = float(st.session_state["cox_widget"])
 Cox = Cox_nf * 1e-9
 
 # ============================================================
@@ -745,10 +769,49 @@ def consume_restore_value(key, default=None):
 # Upload
 # ============================================================
 
-uploaded_file = st.file_uploader(
-    "측정된 엑셀 파일을 업로드하세요",
-    type=["xlsx", "xls"],
-)
+main_col, device_col = st.columns([4.4, 1.6], gap="large")
+
+with device_col:
+    st.markdown(
+        """
+        <div class="device-panel">
+            <div class="device-panel-title">Device Information</div>
+            <div class="device-panel-caption">현재 분석에 적용되는 소자 조건</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    operating_mode = st.radio(
+        "Operating Mode",
+        ["Linear", "Saturation"],
+        key="operating_mode_widget",
+        horizontal=True,
+    )
+    W = st.number_input(
+        "Width (μm)",
+        min_value=0.000001,
+        step=50.0,
+        key="width_widget",
+    )
+    L = st.number_input(
+        "Length (μm)",
+        min_value=0.000001,
+        step=50.0,
+        key="length_widget",
+    )
+    Cox_nf = st.number_input(
+        "Capacitance (nF/cm⁻²)",
+        min_value=0.000001,
+        key="cox_widget",
+    )
+    Cox = Cox_nf * 1e-9
+
+with main_col:
+    uploaded_file = st.file_uploader(
+        "측정된 엑셀 파일을 업로드하세요",
+        type=["xlsx", "xls"],
+    )
 
 # Saved log clicked: reconstruct the uploaded file in-memory
 if st.session_state.get("restore_pending") and st.session_state.get("restored_file_bytes"):
