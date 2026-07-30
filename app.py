@@ -385,6 +385,56 @@ def safe_excel_filename(name):
 initialize_log_state()
 
 
+def restore_log_state(record):
+    """
+    Restore the saved analysis state.
+    File bytes cannot be persisted in session_state across app restarts,
+    but within the current session the uploaded file bytes are stored in the log.
+    """
+    st.session_state["restored_log_id"] = record.get("_log_id")
+    st.session_state["restored_file_name"] = record.get("File", "")
+    st.session_state["restored_file_bytes"] = record.get("_file_bytes")
+    st.session_state["restored_sheet"] = record.get("Sheet")
+    st.session_state["restored_operating_mode"] = record.get("Operating mode")
+    st.session_state["restored_W"] = record.get("Width (μm)")
+    st.session_state["restored_L"] = record.get("Length (μm)")
+    st.session_state["restored_Cox_nf"] = record.get("Cox (nF/cm²)")
+    st.session_state["restored_peak_vg_fwd"] = record.get("Forward peak Vg (V)")
+    st.session_state["restored_peak_vg_bwd"] = record.get("Backward peak Vg (V)")
+    st.session_state["restored_current_vg_fwd"] = record.get("Selected Forward Vg (V)")
+    st.session_state["restored_current_vg_bwd"] = record.get("Selected Backward Vg (V)")
+    st.session_state["restored_removed_fwd"] = record.get("_removed_fwd_indices", [])
+    st.session_state["restored_removed_bwd"] = record.get("_removed_bwd_indices", [])
+    st.session_state["restore_pending"] = True
+
+
+def consume_restore_value(key, default=None):
+    return st.session_state.pop(key, default)
+
+
+
+# ============================================================
+# Device information state
+# ============================================================
+restored_mode = st.session_state.get("restored_operating_mode")
+if "operating_mode_widget" not in st.session_state:
+    st.session_state["operating_mode_widget"] = (
+        restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
+    )
+if "width_widget" not in st.session_state:
+    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1050.0)
+if "length_widget" not in st.session_state:
+    st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
+if "cox_widget" not in st.session_state:
+    st.session_state["cox_widget"] = float(st.session_state.get("restored_Cox_nf") or 34.5)
+
+operating_mode = st.session_state["operating_mode_widget"]
+W = float(st.session_state["width_widget"])
+L = float(st.session_state["length_widget"])
+Cox_nf = float(st.session_state["cox_widget"])
+Cox = Cox_nf * 1e-9
+
+
 # ============================================================
 # Sidebar: Project manager
 # ============================================================
@@ -495,7 +545,7 @@ if "operating_mode_widget" not in st.session_state:
         restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
     )
 if "width_widget" not in st.session_state:
-    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1000.0)
+    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1050.0)
 if "length_widget" not in st.session_state:
     st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
 if "cox_widget" not in st.session_state:
@@ -896,60 +946,18 @@ def render_discrete_vg_control(
 
 
 
-def restore_log_state(record):
-    """
-    Restore the saved analysis state.
-    File bytes cannot be persisted in session_state across app restarts,
-    but within the current session the uploaded file bytes are stored in the log.
-    """
-    st.session_state["restored_log_id"] = record.get("_log_id")
-    st.session_state["restored_file_name"] = record.get("File", "")
-    st.session_state["restored_file_bytes"] = record.get("_file_bytes")
-    st.session_state["restored_sheet"] = record.get("Sheet")
-    st.session_state["restored_operating_mode"] = record.get("Operating mode")
-    st.session_state["restored_W"] = record.get("Width (μm)")
-    st.session_state["restored_L"] = record.get("Length (μm)")
-    st.session_state["restored_Cox_nf"] = record.get("Cox (nF/cm²)")
-    st.session_state["restored_peak_vg_fwd"] = record.get("Forward peak Vg (V)")
-    st.session_state["restored_peak_vg_bwd"] = record.get("Backward peak Vg (V)")
-    st.session_state["restored_current_vg_fwd"] = record.get("Selected Forward Vg (V)")
-    st.session_state["restored_current_vg_bwd"] = record.get("Selected Backward Vg (V)")
-    st.session_state["restored_removed_fwd"] = record.get("_removed_fwd_indices", [])
-    st.session_state["restored_removed_bwd"] = record.get("_removed_bwd_indices", [])
-    st.session_state["restore_pending"] = True
-
-
-def consume_restore_value(key, default=None):
-    return st.session_state.pop(key, default)
-
-
-
-# ============================================================
-# Device information state
-# ============================================================
-restored_mode = st.session_state.get("restored_operating_mode")
-if "operating_mode_widget" not in st.session_state:
-    st.session_state["operating_mode_widget"] = (
-        restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
-    )
-if "width_widget" not in st.session_state:
-    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1000.0)
-if "length_widget" not in st.session_state:
-    st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
-if "cox_widget" not in st.session_state:
-    st.session_state["cox_widget"] = float(st.session_state.get("restored_Cox_nf") or 34.5)
-
-operating_mode = st.session_state["operating_mode_widget"]
-W = float(st.session_state["width_widget"])
-L = float(st.session_state["length_widget"])
-Cox_nf = float(st.session_state["cox_widget"])
-Cox = Cox_nf * 1e-9
-
 # ============================================================
 # Upload
 # ============================================================
 
 main_col, device_col = st.columns([4.4, 1.6], gap="large")
+
+with main_col:
+    uploaded_file = st.file_uploader(
+        "측정된 엑셀 파일을 업로드하세요",
+        type=["xlsx", "xls"],
+    )
+    main_content = st.container()
 
 with device_col:
     st.markdown(
@@ -987,14 +995,7 @@ with device_col:
     )
     Cox = Cox_nf * 1e-9
 
-    # Analysis controls will be rendered here after data are loaded.
     right_controls = st.container()
-
-with main_col:
-    uploaded_file = st.file_uploader(
-        "측정된 엑셀 파일을 업로드하세요",
-        type=["xlsx", "xls"],
-    )
 
 # Saved log clicked: reconstruct the uploaded file in-memory
 if st.session_state.get("restore_pending") and st.session_state.get("restored_file_bytes"):
@@ -1002,670 +1003,671 @@ if st.session_state.get("restore_pending") and st.session_state.get("restored_fi
     restored_buffer.name = st.session_state.get("restored_file_name", "restored.xlsx")
     uploaded_file = restored_buffer
 
-if uploaded_file:
-    file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-    xls = pd.ExcelFile(uploaded_file)
-    target_sheets = [
-        s for s in xls.sheet_names
-        if s == "Data" or s.lower().startswith("append")
-    ]
+with main_content:
+    if uploaded_file:
+        file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+        xls = pd.ExcelFile(uploaded_file)
+        target_sheets = [
+            s for s in xls.sheet_names
+            if s == "Data" or s.lower().startswith("append")
+        ]
 
-    if not target_sheets:
-        st.error("분석할 수 있는 시트('Data' 또는 'Append...')가 없습니다.")
-        st.stop()
-
-    st.sidebar.markdown("---")
-    # Select Data Sheet UI removed.
-    # Use restored sheet when valid; otherwise prefer "Data", then first valid sheet.
-    restored_sheet = st.session_state.get("restored_sheet")
-    if restored_sheet in target_sheets:
-        selected_sheet = restored_sheet
-    elif "Data" in target_sheets:
-        selected_sheet = "Data"
-    else:
-        selected_sheet = target_sheets[0]
-
-    # ========================================================
-    # Average mode
-    # ========================================================
-    if False:
-        rows = []
-
-        for sheet in target_sheets:
-            df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
-            if {"GateV", "DrainI", "DrainV"}.issubset(df_sheet.columns):
-                try:
-                    result = analyze_sheet(df_sheet, file_id, sheet)
-                    rows.append({"Sheet": sheet, **result["params"]})
-                except Exception:
-                    pass
-
-        if not rows:
-            st.error("유효한 시트가 없습니다.")
+        if not target_sheets:
+            st.error("분석할 수 있는 시트('Data' 또는 'Append...')가 없습니다.")
             st.stop()
 
-        stats = pd.DataFrame(rows)
-        st.markdown(f"### 📊 Statistics ({operating_mode})")
-
-        p = {
-            key: stats[key].mean()
-            for key in [
-                "mu_fwd", "mu_bwd", "vth_fwd", "vth_bwd",
-                "ss_fwd", "ss_bwd", "hysteresis",
-                "onoff", "on_density", "off_density",
-            ]
-        }
-
-        st.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
-        f1, f2, f3 = st.columns(3)
-        f1.markdown(make_card("Peak Mobility", f"{p['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-        f2.markdown(make_card("Threshold Voltage", f"{p['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-        f3.markdown(make_card("SS", f"{p['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
-
-        st.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
-        b1, b2, b3 = st.columns(3)
-        b1.markdown(make_card("Peak Mobility", f"{p['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-        b2.markdown(make_card("Threshold Voltage", f"{p['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-        b3.markdown(make_card("SS", f"{p['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
-
-        st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
-        o1, o2, o3, o4 = st.columns(4)
-        o1.markdown(make_card("On/Off Ratio", sci(p["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-        o2.markdown(make_card("ON Current / Width", f"{sci(p['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o3.markdown(make_card("OFF Current / Width", f"{sci(p['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o4.markdown(make_card("Hysteresis", f"{p['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
-
-    # ========================================================
-    # Single-sheet mode
-    # ========================================================
-    else:
-        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
-        required = {"GateV", "DrainI", "DrainV"}
-
-        if not required.issubset(df.columns):
-            st.error("GateV, DrainI, DrainV 컬럼이 필요합니다.")
-            st.stop()
-
-        try:
-            res = analyze_sheet(df, file_id, selected_sheet)
-        except Exception as exc:
-            st.error(str(exc))
-            st.stop()
-
-        keys = res["keys"]
-        fwd = res["fwd"]
-        bwd = res["bwd"]
-
-        # Apply saved log state once, then rerun with restored selections.
-        if st.session_state.get("restore_pending"):
-            st.session_state[keys["removed_fwd"]] = list(
-                st.session_state.get("restored_removed_fwd", [])
-            )
-            st.session_state[keys["removed_bwd"]] = list(
-                st.session_state.get("restored_removed_bwd", [])
-            )
-
-            if st.session_state.get("restored_peak_vg_fwd") is not None:
-                st.session_state[keys["peak_slider_fwd"]] = float(
-                    st.session_state["restored_peak_vg_fwd"]
-                )
-            if st.session_state.get("restored_peak_vg_bwd") is not None:
-                st.session_state[keys["peak_slider_bwd"]] = float(
-                    st.session_state["restored_peak_vg_bwd"]
-                )
-            if st.session_state.get("restored_current_vg_fwd") is not None:
-                st.session_state[keys["current_slider_fwd"]] = float(
-                    st.session_state["restored_current_vg_fwd"]
-                )
-            if st.session_state.get("restored_current_vg_bwd") is not None:
-                st.session_state[keys["current_slider_bwd"]] = float(
-                    st.session_state["restored_current_vg_bwd"]
-                )
-
-            st.session_state["restore_pending"] = False
-            st.rerun()
-
-        # ====================================================
-        # Peak point adjustment
-        # ====================================================
-        right_controls.markdown("---")
-        right_controls.header("Mobility Peak Point Adjustment")
-        right_controls.caption(
-            "선택한 Vg 지점의 mobility와 Vth가 큰 카드에 반영됩니다. "
-            "−/+ 버튼은 실제 측정 Vg 한 행씩 이동합니다."
-        )
-
-        peak_f_vg = render_discrete_vg_control(
-            title="Forward peak Vg",
-            slider_label="Forward peak Vg",
-            state_key=keys["peak_slider_fwd"],
-            active_df=fwd,
-            default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
-            button_prefix=f"peak_f_{file_id}_{selected_sheet}_{operating_mode}",
-            parent=right_controls,
-        )
-        peak_b_vg = render_discrete_vg_control(
-            title="Backward peak Vg",
-            slider_label="Backward peak Vg",
-            state_key=keys["peak_slider_bwd"],
-            active_df=bwd,
-            default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
-            button_prefix=f"peak_b_{file_id}_{selected_sheet}_{operating_mode}",
-            parent=right_controls,
-        )
-
-        # peak control 변경값을 즉시 parameter에 반영
-        idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
-        idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
-
-        params = parameter_values(
-            fwd["GateV"], fwd["DrainI_active"], res["gm_fwd"], res["mu_fwd"], idx_f,
-            bwd["GateV"], bwd["DrainI_active"], res["gm_bwd"], res["mu_bwd"], idx_b,
-            operating_mode, W,
-        )
-
-        right_controls.caption(
-            f"Fwd μ = {params['mu_fwd']:.3g} cm²/V·s · "
-            f"Bwd μ = {params['mu_bwd']:.3g} cm²/V·s"
-        )
-
-        auto_col_f, auto_col_b = right_controls.columns(2)
-        if auto_col_f.button("Auto Max Fwd", use_container_width=True):
-            st.session_state[keys["force_auto_peak_fwd"]] = True
-            st.rerun()
-        if auto_col_b.button("Auto Max Bwd", use_container_width=True):
-            st.session_state[keys["force_auto_peak_bwd"]] = True
-            st.rerun()
-
-        # ====================================================
-        # Manual removal controls
-        # ====================================================
-        right_controls.markdown("---")
-        right_controls.header("Manual Mobility Point Removal")
-        right_controls.caption(
-            "제거할 mobility Vg를 선택한 뒤 Remove를 누르세요. "
-            "해당 원래 행은 모든 plot과 parameter 계산에서 제외됩니다."
-        )
-
-        selected_f_vg = render_discrete_vg_control(
-            title="Forward removal point",
-            slider_label="Forward removal Vg",
-            state_key=keys["remove_slider_fwd"],
-            active_df=fwd,
-            default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
-            button_prefix=f"remove_f_{file_id}_{selected_sheet}_{operating_mode}",
-            parent=right_controls,
-        )
-        selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
-        selected_f_mu = float(res["mu_fwd"][selected_f_idx])
-        right_controls.caption(
-            f"Vg = {selected_f_row['GateV']:.2f} V · "
-            f"Mobility = {selected_f_mu:.3g} cm²/V·s"
-        )
-
-        fcol1, fcol2 = right_controls.columns(2)
-        if fcol1.button("Remove Fwd", use_container_width=True):
-            source_idx = int(selected_f_row["__source_index"])
-            removed = list(st.session_state[keys["removed_fwd"]])
-            if source_idx not in removed:
-                removed.append(source_idx)
-                st.session_state[keys["removed_fwd"]] = removed
-            st.session_state[keys["force_auto_peak_fwd"]] = True
-            st.rerun()
-
-        if fcol2.button("Reset Fwd", use_container_width=True):
-            st.session_state[keys["removed_fwd"]] = []
-            st.session_state[keys["force_auto_peak_fwd"]] = True
-            st.rerun()
-
-        selected_b_vg = render_discrete_vg_control(
-            title="Backward removal point",
-            slider_label="Backward removal Vg",
-            state_key=keys["remove_slider_bwd"],
-            active_df=bwd,
-            default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
-            button_prefix=f"remove_b_{file_id}_{selected_sheet}_{operating_mode}",
-            parent=right_controls,
-        )
-        selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
-        selected_b_mu = float(res["mu_bwd"][selected_b_idx])
-        right_controls.caption(
-            f"Vg = {selected_b_row['GateV']:.2f} V · "
-            f"Mobility = {selected_b_mu:.3g} cm²/V·s"
-        )
-
-        bcol1, bcol2 = right_controls.columns(2)
-        if bcol1.button("Remove Bwd", use_container_width=True):
-            source_idx = int(selected_b_row["__source_index"])
-            removed = list(st.session_state[keys["removed_bwd"]])
-            if source_idx not in removed:
-                removed.append(source_idx)
-                st.session_state[keys["removed_bwd"]] = removed
-            st.session_state[keys["force_auto_peak_bwd"]] = True
-            st.rerun()
-
-        if bcol2.button("Reset Bwd", use_container_width=True):
-            st.session_state[keys["removed_bwd"]] = []
-            st.session_state[keys["force_auto_peak_bwd"]] = True
-            st.rerun()
-
-        removed_f_count = len(st.session_state[keys["removed_fwd"]])
-        removed_b_count = len(st.session_state[keys["removed_bwd"]])
-        right_controls.caption(
-            f"Removed: Forward {removed_f_count} · Backward {removed_b_count}"
-        )
-
-        # ====================================================
-        # Transfer curve point inspection
-        # ====================================================
-        right_controls.markdown("---")
-        right_controls.header("Transfer Current Point")
-        right_controls.caption(
-            "실제 측정 Vg 한 칸씩 이동하며 |DrainI|/Width를 확인합니다."
-        )
-
-        current_f_vg = render_discrete_vg_control(
-            title="Forward transfer Vg",
-            slider_label="Forward transfer Vg",
-            state_key=keys["current_slider_fwd"],
-            active_df=fwd,
-            default_value=float(fwd["GateV"].iloc[0]),
-            button_prefix=f"current_f_{file_id}_{selected_sheet}_{operating_mode}",
-            parent=right_controls,
-        )
-        current_b_vg = render_discrete_vg_control(
-            title="Backward transfer Vg",
-            slider_label="Backward transfer Vg",
-            state_key=keys["current_slider_bwd"],
-            active_df=bwd,
-            default_value=float(bwd["GateV"].iloc[0]),
-            button_prefix=f"current_b_{file_id}_{selected_sheet}_{operating_mode}",
-            parent=right_controls,
-        )
-
-        current_f_idx, current_f_row, current_f_density = current_density_at_vg(
-            fwd, current_f_vg, W
-        )
-        current_b_idx, current_b_row, current_b_density = current_density_at_vg(
-            bwd, current_b_vg, W
-        )
-
-        right_controls.caption(
-            f"Fwd: {sci_plain(current_f_density)} A/μm · "
-            f"Bwd: {sci_plain(current_b_density)} A/μm"
-        )
-
-        # ====================================================
-        # Parameters: active values only
-        # ====================================================
-        st.markdown(
-            f"<h3 style='color:#333;'>📊 Data Sheet: {selected_sheet} "
-            f"({operating_mode})</h3>",
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
-        f1, f2, f3, f4 = st.columns(4)
-        f1.markdown(make_card("Peak Mobility", f"{params['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-        f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-        f3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_fwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
-        f4.markdown(make_card("SS", f"{params['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
-
-        st.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
-        b1, b2, b3, b4 = st.columns(4)
-        b1.markdown(make_card("Peak Mobility", f"{params['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-        b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-        b3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_bwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
-        b4.markdown(make_card("SS", f"{params['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
-
-        st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
-        o1, o2, o3, o4 = st.columns(4)
-        o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-        o2.markdown(make_card("ON Current / Width", f"{sci(params['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o3.markdown(make_card("OFF Current / Width", f"{sci(params['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
-
-        st.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
-        c2.markdown(make_card("Forward |Id| / W", f"{sci(current_f_density)} A/μm", "#2E60AB"), unsafe_allow_html=True)
-        c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
-        c4.markdown(make_card("Backward |Id| / W", f"{sci(current_b_density)} A/μm", "#F05650"), unsafe_allow_html=True)
-
-        # ====================================================
-        # Save current result to selected folder
-        # ====================================================
-        st.markdown("<h4>Save Analysis Result</h4>", unsafe_allow_html=True)
-        save_col1, save_col2 = st.columns([3, 1])
-
-        current_project = st.session_state.get("active_log_folder")
-        if current_project:
-            save_col1.info(f"Current project: {current_project}")
+        st.sidebar.markdown("---")
+        # Select Data Sheet UI removed.
+        # Use restored sheet when valid; otherwise prefer "Data", then first valid sheet.
+        restored_sheet = st.session_state.get("restored_sheet")
+        if restored_sheet in target_sheets:
+            selected_sheet = restored_sheet
+        elif "Data" in target_sheets:
+            selected_sheet = "Data"
         else:
-            save_col1.warning("왼쪽 Projects에서 프로젝트를 먼저 생성하세요.")
+            selected_sheet = target_sheets[0]
 
-        if save_col2.button(
-            "Add to Project",
-            use_container_width=True,
-            disabled=current_project is None,
-        ):
-            # Store file bytes and exact analysis selections for click-to-restore.
-            try:
-                uploaded_file.seek(0)
-                saved_file_bytes = uploaded_file.read()
-                uploaded_file.seek(0)
-            except Exception:
-                saved_file_bytes = None
+        # ========================================================
+        # Average mode
+        # ========================================================
+        if False:
+            rows = []
 
-            log_entry = {
-                "_log_id": str(uuid.uuid4()),
-                "_file_bytes": saved_file_bytes,
-                "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
-                "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
-                "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "File": uploaded_file.name,
-                "Sheet": selected_sheet,
-                "Operating mode": operating_mode,
-                "Width (μm)": float(W),
-                "Length (μm)": float(L),
-                "Cox (nF/cm²)": float(Cox_nf),
-                "Drain voltage (V)": float(res["vd"]),
-                "Gate voltage range": (
-                    f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
-                    f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
-                ),
-                "Gate voltage step (V)": float(
-                    np.median(np.abs(np.diff(fwd["GateV"])))
-                ) if len(fwd) > 1 else np.nan,
-                "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
-                "Forward Vth (V)": float(params["vth_fwd"]),
-                "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
-                "Forward SS (mV/dec)": float(params["ss_fwd"]),
-                "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
-                "Backward Vth (V)": float(params["vth_bwd"]),
-                "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
-                "Backward SS (mV/dec)": float(params["ss_bwd"]),
-                "Hysteresis (V)": float(params["hysteresis"]),
-                "ON/OFF ratio": float(params["onoff"]),
-                "ON current / Width (A/μm)": float(params["on_density"]),
-                "OFF current / Width (A/μm)": float(params["off_density"]),
-                "Selected Forward Vg (V)": float(current_f_row["GateV"]),
-                "Selected Forward |Id| / W (A/μm)": float(current_f_density),
-                "Selected Backward Vg (V)": float(current_b_row["GateV"]),
-                "Selected Backward |Id| / W (A/μm)": float(current_b_density),
-                "Removed Forward points": int(removed_f_count),
-                "Removed Backward points": int(removed_b_count),
+            for sheet in target_sheets:
+                df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
+                if {"GateV", "DrainI", "DrainV"}.issubset(df_sheet.columns):
+                    try:
+                        result = analyze_sheet(df_sheet, file_id, sheet)
+                        rows.append({"Sheet": sheet, **result["params"]})
+                    except Exception:
+                        pass
+
+            if not rows:
+                st.error("유효한 시트가 없습니다.")
+                st.stop()
+
+            stats = pd.DataFrame(rows)
+            st.markdown(f"### 📊 Statistics ({operating_mode})")
+
+            p = {
+                key: stats[key].mean()
+                for key in [
+                    "mu_fwd", "mu_bwd", "vth_fwd", "vth_bwd",
+                    "ss_fwd", "ss_bwd", "hysteresis",
+                    "onoff", "on_density", "off_density",
+                ]
             }
-            st.session_state["analysis_log_folders"][current_project].append(log_entry)
-            st.session_state["active_log_folder"] = current_project
-            st.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
-            st.rerun()
 
-        st.markdown("---")
+            st.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
+            f1, f2, f3 = st.columns(3)
+            f1.markdown(make_card("Peak Mobility", f"{p['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+            f2.markdown(make_card("Threshold Voltage", f"{p['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+            f3.markdown(make_card("SS", f"{p['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
 
-        # ====================================================
-        # Plot: active data only
-        # ====================================================
-        graph3_title = (
-            "3. Transconductance (Gₘ)"
-            if operating_mode == "Linear"
-            else "3. d(√I<sub>D</sub>)/dV<sub>G</sub>"
-        )
-        graph4_title = (
-            "4. Linear Mobility"
-            if operating_mode == "Linear"
-            else "4. Saturation Mobility"
-        )
+            st.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
+            b1, b2, b3 = st.columns(3)
+            b1.markdown(make_card("Peak Mobility", f"{p['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+            b2.markdown(make_card("Threshold Voltage", f"{p['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+            b3.markdown(make_card("SS", f"{p['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
 
-        fig = make_subplots(
-            rows=2,
-            cols=2,
-            subplot_titles=(
-                "1. Transfer (Log Scale)",
-                "2. Transfer (Linear Scale)",
-                graph3_title,
-                graph4_title,
-            ),
-            horizontal_spacing=0.25,
-            vertical_spacing=0.25,
-        )
+            st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
+            o1, o2, o3, o4 = st.columns(4)
+            o1.markdown(make_card("On/Off Ratio", sci(p["onoff"]), "#5B5F97"), unsafe_allow_html=True)
+            o2.markdown(make_card("ON Current / Width", f"{sci(p['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+            o3.markdown(make_card("OFF Current / Width", f"{sci(p['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+            o4.markdown(make_card("Hysteresis", f"{p['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
 
-        color_fwd = "blue"
-        color_bwd = "red"
+        # ========================================================
+        # Single-sheet mode
+        # ========================================================
+        else:
+            df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+            required = {"GateV", "DrainI", "DrainV"}
 
-        vg_fwd = fwd["GateV"]
-        id_fwd = fwd["DrainI_active"]
-        vg_bwd = bwd["GateV"]
-        id_bwd = bwd["DrainI_active"]
+            if not required.issubset(df.columns):
+                st.error("GateV, DrainI, DrainV 컬럼이 필요합니다.")
+                st.stop()
 
-        # Transfer log
-        fig.add_trace(go.Scatter(
-            x=vg_fwd, y=np.abs(id_fwd),
-            name="Forward", line=dict(color=color_fwd),
-        ), row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=vg_bwd, y=np.abs(id_bwd),
-            name="Backward", line=dict(color=color_bwd),
-        ), row=1, col=1)
+            try:
+                res = analyze_sheet(df, file_id, selected_sheet)
+            except Exception as exc:
+                st.error(str(exc))
+                st.stop()
 
-        # Gate leakage only in raw mode because manually removed rows no longer align
-        if "GateI" in df.columns and removed_f_count == 0 and removed_b_count == 0:
-            ig = pd.to_numeric(df["GateI"], errors="coerce")
-            turning = len(res["fwd_raw"]) - 1
-            ig_f = ig.iloc[:turning + 1].reset_index(drop=True)
-            ig_b = ig.iloc[turning:].reset_index(drop=True)
-            fig.add_trace(go.Scatter(
-                x=res["fwd_raw"]["GateV"], y=np.abs(ig_f),
-                name="Ig (Fwd)", line=dict(color="dimgray", dash="dot"),
-                showlegend=False,
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=res["bwd_raw"]["GateV"], y=np.abs(ig_b),
-                name="Ig (Bwd)", line=dict(color="dimgray", dash="dot"),
-                showlegend=False,
-            ), row=1, col=1)
+            keys = res["keys"]
+            fwd = res["fwd"]
+            bwd = res["bwd"]
 
-        # Transfer linear
-        fig.add_trace(go.Scatter(
-            x=vg_fwd, y=np.abs(id_fwd),
-            name="Forward", line=dict(color=color_fwd),
-        ), row=1, col=2)
-        fig.add_trace(go.Scatter(
-            x=vg_bwd, y=np.abs(id_bwd),
-            name="Backward", line=dict(color=color_bwd),
-        ), row=1, col=2)
+            # Apply saved log state once, then rerun with restored selections.
+            if st.session_state.get("restore_pending"):
+                st.session_state[keys["removed_fwd"]] = list(
+                    st.session_state.get("restored_removed_fwd", [])
+                )
+                st.session_state[keys["removed_bwd"]] = list(
+                    st.session_state.get("restored_removed_bwd", [])
+                )
 
-        # 선택한 transfer-current 지점을 log/linear transfer plot에 표시
-        for row_num, col_num in ((1, 1), (1, 2)):
-            fig.add_trace(go.Scatter(
-                x=[float(current_f_row["GateV"])],
-                y=[abs(float(current_f_row["DrainI_active"]))],
-                mode="markers",
-                marker=dict(symbol="circle-open", size=11, color="black", line=dict(width=2)),
-                name="Fwd current target",
-                showlegend=False,
-            ), row=row_num, col=col_num)
-            fig.add_trace(go.Scatter(
-                x=[float(current_b_row["GateV"])],
-                y=[abs(float(current_b_row["DrainI_active"]))],
-                mode="markers",
-                marker=dict(symbol="square-open", size=11, color="black", line=dict(width=2)),
-                name="Bwd current target",
-                showlegend=False,
-            ), row=row_num, col=col_num)
+                if st.session_state.get("restored_peak_vg_fwd") is not None:
+                    st.session_state[keys["peak_slider_fwd"]] = float(
+                        st.session_state["restored_peak_vg_fwd"]
+                    )
+                if st.session_state.get("restored_peak_vg_bwd") is not None:
+                    st.session_state[keys["peak_slider_bwd"]] = float(
+                        st.session_state["restored_peak_vg_bwd"]
+                    )
+                if st.session_state.get("restored_current_vg_fwd") is not None:
+                    st.session_state[keys["current_slider_fwd"]] = float(
+                        st.session_state["restored_current_vg_fwd"]
+                    )
+                if st.session_state.get("restored_current_vg_bwd") is not None:
+                    st.session_state[keys["current_slider_bwd"]] = float(
+                        st.session_state["restored_current_vg_bwd"]
+                    )
 
-        # Gm
-        fig.add_trace(go.Scatter(
-            x=vg_fwd, y=np.abs(res["gm_fwd"]),
-            name="Forward", line=dict(color=color_fwd),
-        ), row=2, col=1)
-        fig.add_trace(go.Scatter(
-            x=vg_bwd, y=np.abs(res["gm_bwd"]),
-            name="Backward", line=dict(color=color_bwd),
-        ), row=2, col=1)
+                st.session_state["restore_pending"] = False
+                st.rerun()
 
-        # Mobility
-        fig.add_trace(go.Scatter(
-            x=vg_fwd, y=res["mu_fwd"],
-            name="Forward", line=dict(color=color_fwd),
-        ), row=2, col=2)
-        fig.add_trace(go.Scatter(
-            x=vg_bwd, y=res["mu_bwd"],
-            name="Backward", line=dict(color=color_bwd),
-        ), row=2, col=2)
-
-        # Removal candidates shown only on mobility plot
-        fig.add_trace(go.Scatter(
-            x=[float(selected_f_row["GateV"])],
-            y=[selected_f_mu],
-            mode="markers",
-            name="Fwd removal target",
-            marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
-            showlegend=False,
-        ), row=2, col=2)
-
-        fig.add_trace(go.Scatter(
-            x=[float(selected_b_row["GateV"])],
-            y=[selected_b_mu],
-            mode="markers",
-            name="Bwd removal target",
-            marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
-            showlegend=False,
-        ), row=2, col=2)
-
-        # Automatically re-detected mobility maxima
-        peak_f_vg = params["peak_vg_fwd"]
-        peak_b_vg = params["peak_vg_bwd"]
-
-        for col in (1, 2):
-            fig.add_vline(
-                x=peak_f_vg,
-                line_width=1.5,
-                line_dash="dash",
-                line_color=color_fwd,
-                row=2,
-                col=col,
-            )
-            fig.add_vline(
-                x=peak_b_vg,
-                line_width=1.5,
-                line_dash="dash",
-                line_color=color_bwd,
-                row=2,
-                col=col,
+            # ====================================================
+            # Peak point adjustment
+            # ====================================================
+            right_controls.markdown("---")
+            right_controls.header("Mobility Peak Point Adjustment")
+            right_controls.caption(
+                "선택한 Vg 지점의 mobility와 Vth가 큰 카드에 반영됩니다. "
+                "−/+ 버튼은 실제 측정 Vg 한 행씩 이동합니다."
             )
 
-        vd_formatted = f"{res['vd']:.2f}".rstrip("0").rstrip(".")
-        fig.add_annotation(
-            x=0.001,
-            y=0.001,
-            xref="x domain",
-            yref="y domain",
-            text=f"<b>V<sub>D</sub> = {vd_formatted} V</b>",
-            showarrow=False,
-            font=dict(size=12, color="black"),
-            row=1,
-            col=1,
-        )
+            peak_f_vg = render_discrete_vg_control(
+                title="Forward peak Vg",
+                slider_label="Forward peak Vg",
+                state_key=keys["peak_slider_fwd"],
+                active_df=fwd,
+                default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+                button_prefix=f"peak_f_{file_id}_{selected_sheet}_{operating_mode}",
+                parent=right_controls,
+            )
+            peak_b_vg = render_discrete_vg_control(
+                title="Backward peak Vg",
+                slider_label="Backward peak Vg",
+                state_key=keys["peak_slider_bwd"],
+                active_df=bwd,
+                default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+                button_prefix=f"peak_b_{file_id}_{selected_sheet}_{operating_mode}",
+                parent=right_controls,
+            )
 
-        common_axis = dict(
-            ticks="outside",
-            tickwidth=1.5,
-            tickcolor="black",
-            ticklen=8,
-            showline=True,
-            linewidth=1.5,
-            linecolor="black",
-            mirror=True,
-            showgrid=True,
-            gridwidth=1,
-            gridcolor="lightgray",
-            griddash="dot",
-            zeroline=False,
-            title_font=dict(size=20),
-            tickfont=dict(size=14),
-        )
+            # peak control 변경값을 즉시 parameter에 반영
+            idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
+            idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
 
-        vg_all = pd.concat([vg_fwd, vg_bwd])
-        vg_range = abs(vg_all.max() - vg_all.min())
-        dynamic_dtick = 2.5 if vg_range <= 10 else 10
+            params = parameter_values(
+                fwd["GateV"], fwd["DrainI_active"], res["gm_fwd"], res["mu_fwd"], idx_f,
+                bwd["GateV"], bwd["DrainI_active"], res["gm_bwd"], res["mu_bwd"], idx_b,
+                operating_mode, W,
+            )
 
-        y3 = (
-            "Gₘ (S)"
-            if operating_mode == "Linear"
-            else "d(√I<sub>D</sub>)/dV<sub>G</sub> (A<sup>0.5</sup>/V)"
-        )
-        y4 = (
-            "Linear Mobility (cm²/V·s)"
-            if operating_mode == "Linear"
-            else "Saturation Mobility (cm²/V·s)"
-        )
+            right_controls.caption(
+                f"Fwd μ = {params['mu_fwd']:.3g} cm²/V·s · "
+                f"Bwd μ = {params['mu_bwd']:.3g} cm²/V·s"
+            )
 
-        fig.update_xaxes(
-            title_text="Gate Voltage (V)",
-            dtick=dynamic_dtick,
-            **common_axis,
-        )
-        fig.update_yaxes(**common_axis)
-        fig.update_yaxes(
-            title_text="Drain Current (A)",
-            type="log",
-            row=1,
-            col=1,
-        )
-        fig.update_yaxes(
-            title_text="Drain Current (A)",
-            row=1,
-            col=2,
-        )
-        fig.update_yaxes(
-            title_text=y3,
-            row=2,
-            col=1,
-        )
-        fig.update_yaxes(
-            title_text=y4,
-            row=2,
-            col=2,
-        )
+            auto_col_f, auto_col_b = right_controls.columns(2)
+            if auto_col_f.button("Auto Max Fwd", use_container_width=True):
+                st.session_state[keys["force_auto_peak_fwd"]] = True
+                st.rerun()
+            if auto_col_b.button("Auto Max Bwd", use_container_width=True):
+                st.session_state[keys["force_auto_peak_bwd"]] = True
+                st.rerun()
 
-        fig.update_layout(
-            width=1000,
-            height=1000,
-            autosize=False,
-            template="plotly_white",
-            margin=dict(t=120, b=80, l=100, r=100),
-        )
-        fig.update_annotations(font_size=20)
+            # ====================================================
+            # Manual removal controls
+            # ====================================================
+            right_controls.markdown("---")
+            right_controls.header("Manual Mobility Point Removal")
+            right_controls.caption(
+                "제거할 mobility Vg를 선택한 뒤 Remove를 누르세요. "
+                "해당 원래 행은 모든 plot과 parameter 계산에서 제외됩니다."
+            )
 
-        st.plotly_chart(fig, use_container_width=False)
+            selected_f_vg = render_discrete_vg_control(
+                title="Forward removal point",
+                slider_label="Forward removal Vg",
+                state_key=keys["remove_slider_fwd"],
+                active_df=fwd,
+                default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+                button_prefix=f"remove_f_{file_id}_{selected_sheet}_{operating_mode}",
+                parent=right_controls,
+            )
+            selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
+            selected_f_mu = float(res["mu_fwd"][selected_f_idx])
+            right_controls.caption(
+                f"Vg = {selected_f_row['GateV']:.2f} V · "
+                f"Mobility = {selected_f_mu:.3g} cm²/V·s"
+            )
 
-        # ====================================================
-        # Download active data
-        # ====================================================
-        export_df = pd.concat([
-            pd.DataFrame({
-                "GateV_forward": vg_fwd.reset_index(drop=True),
-                "DrainI_forward_active": id_fwd.reset_index(drop=True),
-                "DrainI_over_width_forward_A_per_um": np.abs(id_fwd.reset_index(drop=True)) / W,
-                "gm_forward_active": pd.Series(res["gm_fwd"]),
-                "mobility_forward_active": pd.Series(res["mu_fwd"]),
-                "source_index_forward": fwd["__source_index"].reset_index(drop=True),
-            }),
-            pd.DataFrame({
-                "GateV_backward": vg_bwd.reset_index(drop=True),
-                "DrainI_backward_active": id_bwd.reset_index(drop=True),
-                "DrainI_over_width_backward_A_per_um": np.abs(id_bwd.reset_index(drop=True)) / W,
-                "gm_backward_active": pd.Series(res["gm_bwd"]),
-                "mobility_backward_active": pd.Series(res["mu_bwd"]),
-                "source_index_backward": bwd["__source_index"].reset_index(drop=True),
-            }),
-        ], axis=1)
+            fcol1, fcol2 = right_controls.columns(2)
+            if fcol1.button("Remove Fwd", use_container_width=True):
+                source_idx = int(selected_f_row["__source_index"])
+                removed = list(st.session_state[keys["removed_fwd"]])
+                if source_idx not in removed:
+                    removed.append(source_idx)
+                    st.session_state[keys["removed_fwd"]] = removed
+                st.session_state[keys["force_auto_peak_fwd"]] = True
+                st.rerun()
 
-        st.download_button(
-            "Download active analysis (CSV)",
-            data=export_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"{selected_sheet}_{operating_mode}_manual_removed.csv",
-            mime="text/csv",
-        )
+            if fcol2.button("Reset Fwd", use_container_width=True):
+                st.session_state[keys["removed_fwd"]] = []
+                st.session_state[keys["force_auto_peak_fwd"]] = True
+                st.rerun()
+
+            selected_b_vg = render_discrete_vg_control(
+                title="Backward removal point",
+                slider_label="Backward removal Vg",
+                state_key=keys["remove_slider_bwd"],
+                active_df=bwd,
+                default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+                button_prefix=f"remove_b_{file_id}_{selected_sheet}_{operating_mode}",
+                parent=right_controls,
+            )
+            selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
+            selected_b_mu = float(res["mu_bwd"][selected_b_idx])
+            right_controls.caption(
+                f"Vg = {selected_b_row['GateV']:.2f} V · "
+                f"Mobility = {selected_b_mu:.3g} cm²/V·s"
+            )
+
+            bcol1, bcol2 = right_controls.columns(2)
+            if bcol1.button("Remove Bwd", use_container_width=True):
+                source_idx = int(selected_b_row["__source_index"])
+                removed = list(st.session_state[keys["removed_bwd"]])
+                if source_idx not in removed:
+                    removed.append(source_idx)
+                    st.session_state[keys["removed_bwd"]] = removed
+                st.session_state[keys["force_auto_peak_bwd"]] = True
+                st.rerun()
+
+            if bcol2.button("Reset Bwd", use_container_width=True):
+                st.session_state[keys["removed_bwd"]] = []
+                st.session_state[keys["force_auto_peak_bwd"]] = True
+                st.rerun()
+
+            removed_f_count = len(st.session_state[keys["removed_fwd"]])
+            removed_b_count = len(st.session_state[keys["removed_bwd"]])
+            right_controls.caption(
+                f"Removed: Forward {removed_f_count} · Backward {removed_b_count}"
+            )
+
+            # ====================================================
+            # Transfer curve point inspection
+            # ====================================================
+            right_controls.markdown("---")
+            right_controls.header("Transfer Current Point")
+            right_controls.caption(
+                "실제 측정 Vg 한 칸씩 이동하며 |DrainI|/Width를 확인합니다."
+            )
+
+            current_f_vg = render_discrete_vg_control(
+                title="Forward transfer Vg",
+                slider_label="Forward transfer Vg",
+                state_key=keys["current_slider_fwd"],
+                active_df=fwd,
+                default_value=float(fwd["GateV"].iloc[0]),
+                button_prefix=f"current_f_{file_id}_{selected_sheet}_{operating_mode}",
+                parent=right_controls,
+            )
+            current_b_vg = render_discrete_vg_control(
+                title="Backward transfer Vg",
+                slider_label="Backward transfer Vg",
+                state_key=keys["current_slider_bwd"],
+                active_df=bwd,
+                default_value=float(bwd["GateV"].iloc[0]),
+                button_prefix=f"current_b_{file_id}_{selected_sheet}_{operating_mode}",
+                parent=right_controls,
+            )
+
+            current_f_idx, current_f_row, current_f_density = current_density_at_vg(
+                fwd, current_f_vg, W
+            )
+            current_b_idx, current_b_row, current_b_density = current_density_at_vg(
+                bwd, current_b_vg, W
+            )
+
+            right_controls.caption(
+                f"Fwd: {sci_plain(current_f_density)} A/μm · "
+                f"Bwd: {sci_plain(current_b_density)} A/μm"
+            )
+
+            # ====================================================
+            # Parameters: active values only
+            # ====================================================
+            st.markdown(
+                f"<h3 style='color:#333;'>📊 Data Sheet: {selected_sheet} "
+                f"({operating_mode})</h3>",
+                unsafe_allow_html=True,
+            )
+
+            st.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
+            f1, f2, f3, f4 = st.columns(4)
+            f1.markdown(make_card("Peak Mobility", f"{params['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+            f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+            f3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_fwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
+            f4.markdown(make_card("SS", f"{params['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+
+            st.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
+            b1, b2, b3, b4 = st.columns(4)
+            b1.markdown(make_card("Peak Mobility", f"{params['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
+            b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
+            b3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_bwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
+            b4.markdown(make_card("SS", f"{params['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+
+            st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
+            o1, o2, o3, o4 = st.columns(4)
+            o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
+            o2.markdown(make_card("ON Current / Width", f"{sci(params['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+            o3.markdown(make_card("OFF Current / Width", f"{sci(params['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+            o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
+
+            st.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
+            c2.markdown(make_card("Forward |Id| / W", f"{sci(current_f_density)} A/μm", "#2E60AB"), unsafe_allow_html=True)
+            c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
+            c4.markdown(make_card("Backward |Id| / W", f"{sci(current_b_density)} A/μm", "#F05650"), unsafe_allow_html=True)
+
+            # ====================================================
+            # Save current result to selected folder
+            # ====================================================
+            st.markdown("<h4>Save Analysis Result</h4>", unsafe_allow_html=True)
+            save_col1, save_col2 = st.columns([3, 1])
+
+            current_project = st.session_state.get("active_log_folder")
+            if current_project:
+                save_col1.info(f"Current project: {current_project}")
+            else:
+                save_col1.warning("왼쪽 Projects에서 프로젝트를 먼저 생성하세요.")
+
+            if save_col2.button(
+                "Add to Project",
+                use_container_width=True,
+                disabled=current_project is None,
+            ):
+                # Store file bytes and exact analysis selections for click-to-restore.
+                try:
+                    uploaded_file.seek(0)
+                    saved_file_bytes = uploaded_file.read()
+                    uploaded_file.seek(0)
+                except Exception:
+                    saved_file_bytes = None
+
+                log_entry = {
+                    "_log_id": str(uuid.uuid4()),
+                    "_file_bytes": saved_file_bytes,
+                    "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
+                    "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
+                    "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "File": uploaded_file.name,
+                    "Sheet": selected_sheet,
+                    "Operating mode": operating_mode,
+                    "Width (μm)": float(W),
+                    "Length (μm)": float(L),
+                    "Cox (nF/cm²)": float(Cox_nf),
+                    "Drain voltage (V)": float(res["vd"]),
+                    "Gate voltage range": (
+                        f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
+                        f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+                    ),
+                    "Gate voltage step (V)": float(
+                        np.median(np.abs(np.diff(fwd["GateV"])))
+                    ) if len(fwd) > 1 else np.nan,
+                    "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
+                    "Forward Vth (V)": float(params["vth_fwd"]),
+                    "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
+                    "Forward SS (mV/dec)": float(params["ss_fwd"]),
+                    "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
+                    "Backward Vth (V)": float(params["vth_bwd"]),
+                    "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
+                    "Backward SS (mV/dec)": float(params["ss_bwd"]),
+                    "Hysteresis (V)": float(params["hysteresis"]),
+                    "ON/OFF ratio": float(params["onoff"]),
+                    "ON current / Width (A/μm)": float(params["on_density"]),
+                    "OFF current / Width (A/μm)": float(params["off_density"]),
+                    "Selected Forward Vg (V)": float(current_f_row["GateV"]),
+                    "Selected Forward |Id| / W (A/μm)": float(current_f_density),
+                    "Selected Backward Vg (V)": float(current_b_row["GateV"]),
+                    "Selected Backward |Id| / W (A/μm)": float(current_b_density),
+                    "Removed Forward points": int(removed_f_count),
+                    "Removed Backward points": int(removed_b_count),
+                }
+                st.session_state["analysis_log_folders"][current_project].append(log_entry)
+                st.session_state["active_log_folder"] = current_project
+                st.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
+                st.rerun()
+
+            st.markdown("---")
+
+            # ====================================================
+            # Plot: active data only
+            # ====================================================
+            graph3_title = (
+                "3. Transconductance (Gₘ)"
+                if operating_mode == "Linear"
+                else "3. d(√I<sub>D</sub>)/dV<sub>G</sub>"
+            )
+            graph4_title = (
+                "4. Linear Mobility"
+                if operating_mode == "Linear"
+                else "4. Saturation Mobility"
+            )
+
+            fig = make_subplots(
+                rows=2,
+                cols=2,
+                subplot_titles=(
+                    "1. Transfer (Log Scale)",
+                    "2. Transfer (Linear Scale)",
+                    graph3_title,
+                    graph4_title,
+                ),
+                horizontal_spacing=0.25,
+                vertical_spacing=0.25,
+            )
+
+            color_fwd = "blue"
+            color_bwd = "red"
+
+            vg_fwd = fwd["GateV"]
+            id_fwd = fwd["DrainI_active"]
+            vg_bwd = bwd["GateV"]
+            id_bwd = bwd["DrainI_active"]
+
+            # Transfer log
+            fig.add_trace(go.Scatter(
+                x=vg_fwd, y=np.abs(id_fwd),
+                name="Forward", line=dict(color=color_fwd),
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(
+                x=vg_bwd, y=np.abs(id_bwd),
+                name="Backward", line=dict(color=color_bwd),
+            ), row=1, col=1)
+
+            # Gate leakage only in raw mode because manually removed rows no longer align
+            if "GateI" in df.columns and removed_f_count == 0 and removed_b_count == 0:
+                ig = pd.to_numeric(df["GateI"], errors="coerce")
+                turning = len(res["fwd_raw"]) - 1
+                ig_f = ig.iloc[:turning + 1].reset_index(drop=True)
+                ig_b = ig.iloc[turning:].reset_index(drop=True)
+                fig.add_trace(go.Scatter(
+                    x=res["fwd_raw"]["GateV"], y=np.abs(ig_f),
+                    name="Ig (Fwd)", line=dict(color="dimgray", dash="dot"),
+                    showlegend=False,
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=res["bwd_raw"]["GateV"], y=np.abs(ig_b),
+                    name="Ig (Bwd)", line=dict(color="dimgray", dash="dot"),
+                    showlegend=False,
+                ), row=1, col=1)
+
+            # Transfer linear
+            fig.add_trace(go.Scatter(
+                x=vg_fwd, y=np.abs(id_fwd),
+                name="Forward", line=dict(color=color_fwd),
+            ), row=1, col=2)
+            fig.add_trace(go.Scatter(
+                x=vg_bwd, y=np.abs(id_bwd),
+                name="Backward", line=dict(color=color_bwd),
+            ), row=1, col=2)
+
+            # 선택한 transfer-current 지점을 log/linear transfer plot에 표시
+            for row_num, col_num in ((1, 1), (1, 2)):
+                fig.add_trace(go.Scatter(
+                    x=[float(current_f_row["GateV"])],
+                    y=[abs(float(current_f_row["DrainI_active"]))],
+                    mode="markers",
+                    marker=dict(symbol="circle-open", size=11, color="black", line=dict(width=2)),
+                    name="Fwd current target",
+                    showlegend=False,
+                ), row=row_num, col=col_num)
+                fig.add_trace(go.Scatter(
+                    x=[float(current_b_row["GateV"])],
+                    y=[abs(float(current_b_row["DrainI_active"]))],
+                    mode="markers",
+                    marker=dict(symbol="square-open", size=11, color="black", line=dict(width=2)),
+                    name="Bwd current target",
+                    showlegend=False,
+                ), row=row_num, col=col_num)
+
+            # Gm
+            fig.add_trace(go.Scatter(
+                x=vg_fwd, y=np.abs(res["gm_fwd"]),
+                name="Forward", line=dict(color=color_fwd),
+            ), row=2, col=1)
+            fig.add_trace(go.Scatter(
+                x=vg_bwd, y=np.abs(res["gm_bwd"]),
+                name="Backward", line=dict(color=color_bwd),
+            ), row=2, col=1)
+
+            # Mobility
+            fig.add_trace(go.Scatter(
+                x=vg_fwd, y=res["mu_fwd"],
+                name="Forward", line=dict(color=color_fwd),
+            ), row=2, col=2)
+            fig.add_trace(go.Scatter(
+                x=vg_bwd, y=res["mu_bwd"],
+                name="Backward", line=dict(color=color_bwd),
+            ), row=2, col=2)
+
+            # Removal candidates shown only on mobility plot
+            fig.add_trace(go.Scatter(
+                x=[float(selected_f_row["GateV"])],
+                y=[selected_f_mu],
+                mode="markers",
+                name="Fwd removal target",
+                marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
+                showlegend=False,
+            ), row=2, col=2)
+
+            fig.add_trace(go.Scatter(
+                x=[float(selected_b_row["GateV"])],
+                y=[selected_b_mu],
+                mode="markers",
+                name="Bwd removal target",
+                marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
+                showlegend=False,
+            ), row=2, col=2)
+
+            # Automatically re-detected mobility maxima
+            peak_f_vg = params["peak_vg_fwd"]
+            peak_b_vg = params["peak_vg_bwd"]
+
+            for col in (1, 2):
+                fig.add_vline(
+                    x=peak_f_vg,
+                    line_width=1.5,
+                    line_dash="dash",
+                    line_color=color_fwd,
+                    row=2,
+                    col=col,
+                )
+                fig.add_vline(
+                    x=peak_b_vg,
+                    line_width=1.5,
+                    line_dash="dash",
+                    line_color=color_bwd,
+                    row=2,
+                    col=col,
+                )
+
+            vd_formatted = f"{res['vd']:.2f}".rstrip("0").rstrip(".")
+            fig.add_annotation(
+                x=0.001,
+                y=0.001,
+                xref="x domain",
+                yref="y domain",
+                text=f"<b>V<sub>D</sub> = {vd_formatted} V</b>",
+                showarrow=False,
+                font=dict(size=12, color="black"),
+                row=1,
+                col=1,
+            )
+
+            common_axis = dict(
+                ticks="outside",
+                tickwidth=1.5,
+                tickcolor="black",
+                ticklen=8,
+                showline=True,
+                linewidth=1.5,
+                linecolor="black",
+                mirror=True,
+                showgrid=True,
+                gridwidth=1,
+                gridcolor="lightgray",
+                griddash="dot",
+                zeroline=False,
+                title_font=dict(size=20),
+                tickfont=dict(size=14),
+            )
+
+            vg_all = pd.concat([vg_fwd, vg_bwd])
+            vg_range = abs(vg_all.max() - vg_all.min())
+            dynamic_dtick = 2.5 if vg_range <= 10 else 10
+
+            y3 = (
+                "Gₘ (S)"
+                if operating_mode == "Linear"
+                else "d(√I<sub>D</sub>)/dV<sub>G</sub> (A<sup>0.5</sup>/V)"
+            )
+            y4 = (
+                "Linear Mobility (cm²/V·s)"
+                if operating_mode == "Linear"
+                else "Saturation Mobility (cm²/V·s)"
+            )
+
+            fig.update_xaxes(
+                title_text="Gate Voltage (V)",
+                dtick=dynamic_dtick,
+                **common_axis,
+            )
+            fig.update_yaxes(**common_axis)
+            fig.update_yaxes(
+                title_text="Drain Current (A)",
+                type="log",
+                row=1,
+                col=1,
+            )
+            fig.update_yaxes(
+                title_text="Drain Current (A)",
+                row=1,
+                col=2,
+            )
+            fig.update_yaxes(
+                title_text=y3,
+                row=2,
+                col=1,
+            )
+            fig.update_yaxes(
+                title_text=y4,
+                row=2,
+                col=2,
+            )
+
+            fig.update_layout(
+                width=1000,
+                height=1000,
+                autosize=False,
+                template="plotly_white",
+                margin=dict(t=120, b=80, l=100, r=100),
+            )
+            fig.update_annotations(font_size=20)
+
+            st.plotly_chart(fig, use_container_width=False)
+
+            # ====================================================
+            # Download active data
+            # ====================================================
+            export_df = pd.concat([
+                pd.DataFrame({
+                    "GateV_forward": vg_fwd.reset_index(drop=True),
+                    "DrainI_forward_active": id_fwd.reset_index(drop=True),
+                    "DrainI_over_width_forward_A_per_um": np.abs(id_fwd.reset_index(drop=True)) / W,
+                    "gm_forward_active": pd.Series(res["gm_fwd"]),
+                    "mobility_forward_active": pd.Series(res["mu_fwd"]),
+                    "source_index_forward": fwd["__source_index"].reset_index(drop=True),
+                }),
+                pd.DataFrame({
+                    "GateV_backward": vg_bwd.reset_index(drop=True),
+                    "DrainI_backward_active": id_bwd.reset_index(drop=True),
+                    "DrainI_over_width_backward_A_per_um": np.abs(id_bwd.reset_index(drop=True)) / W,
+                    "gm_backward_active": pd.Series(res["gm_bwd"]),
+                    "mobility_backward_active": pd.Series(res["mu_bwd"]),
+                    "source_index_backward": bwd["__source_index"].reset_index(drop=True),
+                }),
+            ], axis=1)
+
+            st.download_button(
+                "Download active analysis (CSV)",
+                data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"{selected_sheet}_{operating_mode}_manual_removed.csv",
+                mime="text/csv",
+            )
 
