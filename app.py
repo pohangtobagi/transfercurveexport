@@ -13,7 +13,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
 st.title("FET-Analysis_Minjae")
 
 st.markdown("""
@@ -32,21 +32,38 @@ div[data-testid="stSlider"] div[role="slider"] > div {
 
 /* Plot-aligned parameter regions: compact enough to avoid page scrolling */
 div[data-testid="stPlotlyChart"] {
-    margin-bottom: -34px !important;
+    margin-bottom: -58px !important;
 }
 .parameter-region {
-    margin-top: -10px !important;
-    min-height: 0 !important;
+    margin-top: -22px !important;
+    min-height: 430px !important;
+    overflow: visible !important;
 }
 .parameter-region div[data-testid="stVerticalBlockBorderWrapper"] {
-    min-height: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0.18rem 0.12rem !important;
 }
 .parameter-emphasis {
-    font-size: 15px;
-    font-weight: 850;
+    font-size: 19px;
+    font-weight: 900;
     text-align: left !important;
-    padding: 0 3px 2px 3px;
+    padding: 0 2px 5px 2px;
     margin: 0 !important;
+    line-height: 1.25 !important;
+}
+.metric-title {
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1.18;
+    margin-bottom: 6px;
+}
+.metric-value {
+    font-size: 18px;
+    font-weight: 800;
+    line-height: 1.15;
+    white-space: nowrap;
 }
 div[data-testid="stMainBlockContainer"] div[data-testid="stVerticalBlock"] {
     gap: 0.28rem !important;
@@ -529,6 +546,9 @@ Cox_nf = st.sidebar.number_input(
 )
 Cox = Cox_nf * 1e-9
 st.sidebar.markdown("---")
+
+# Populated after an Excel file is available.
+sheet_selector_slot = st.sidebar.container()
 
 st.sidebar.header("Projects")
 st.sidebar.caption("프로젝트를 생성하거나 선택한 뒤 분석을 진행하세요.")
@@ -1226,16 +1246,25 @@ with main_content:
             st.error("분석할 수 있는 시트('Data' 또는 'Append...')가 없습니다.")
             st.stop()
 
-        st.sidebar.markdown("---")
-        # Select Data Sheet UI removed.
-        # Use restored sheet when valid; otherwise prefer "Data", then first valid sheet.
         restored_sheet = st.session_state.get("restored_sheet")
-        if restored_sheet in target_sheets:
-            selected_sheet = restored_sheet
-        elif "Data" in target_sheets:
-            selected_sheet = "Data"
-        else:
-            selected_sheet = target_sheets[0]
+        default_sheet = (
+            restored_sheet if restored_sheet in target_sheets
+            else ("Data" if "Data" in target_sheets else target_sheets[0])
+        )
+        with sheet_selector_slot:
+            st.markdown(
+                "<div style='font-size:18px;font-weight:750;margin:0 0 5px 0;'>"
+                "Select Data Sheet</div>",
+                unsafe_allow_html=True,
+            )
+            selected_sheet = st.selectbox(
+                "Select Data Sheet",
+                target_sheets,
+                index=target_sheets.index(default_sheet),
+                key=f"sheet_selector_{file_id}",
+                label_visibility="collapsed",
+            )
+            st.markdown("---")
 
         # ========================================================
         # Average mode
@@ -1339,14 +1368,6 @@ with main_content:
                         st.session_state.get("restored_off_vg_fwd"),
                     f"off_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
                         st.session_state.get("restored_off_vg_rev"),
-                    f"vth_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
-                        st.session_state.get("restored_vth_vg_fwd"),
-                    f"vth_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
-                        st.session_state.get("restored_vth_vg_rev"),
-                    f"ss_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
-                        st.session_state.get("restored_ss_vg_fwd"),
-                    f"ss_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
-                        st.session_state.get("restored_ss_vg_rev"),
                 }
                 for restore_key, restore_value in restore_key_map.items():
                     if restore_value is not None:
@@ -1443,8 +1464,8 @@ with main_content:
                 peak_default = float(sweep_df["GateV"].iloc[auto_idx])
                 initialize_slider_in_range(peak_key, sweep_df, peak_default)
 
-                vth_key = f"vth_slider_{short}_{file_id}_{selected_sheet}_{operating_mode}"
-                initialize_slider_in_range(vth_key, sweep_df, peak_default)
+                # Vth is always extracted from the tangent at the mobility-selected Vg.
+                vth_key = None
 
                 ss_values = ss_curve(sweep_df["DrainI_active"], sweep_df["GateV"])
                 finite_ss = np.where(np.isfinite(ss_values), ss_values, np.inf)
@@ -1452,12 +1473,8 @@ with main_content:
                     int(np.argmin(finite_ss))
                     if np.any(np.isfinite(ss_values)) else auto_idx
                 )
-                ss_key = f"ss_slider_{short}_{file_id}_{selected_sheet}_{operating_mode}"
-                initialize_slider_in_range(
-                    ss_key,
-                    sweep_df,
-                    float(sweep_df["GateV"].iloc[ss_auto_idx]),
-                )
+                # SS is displayed at its automatic optimum; no manual slider.
+                ss_key = None
 
                 abs_current = np.abs(
                     pd.to_numeric(
@@ -1490,8 +1507,8 @@ with main_content:
                 peak_vg = float(st.session_state[peak_key])
                 peak_idx = int((sweep_df["GateV"] - peak_vg).abs().idxmin())
 
-                vth_vg = float(st.session_state[vth_key])
-                vth_idx = int((sweep_df["GateV"] - vth_vg).abs().idxmin())
+                vth_idx = peak_idx
+                vth_vg = float(sweep_df["GateV"].iloc[vth_idx])
                 vth_value = vth_at_index(
                     sweep_df["GateV"],
                     sweep_df["DrainI_active"],
@@ -1500,8 +1517,8 @@ with main_content:
                     operating_mode,
                 )
 
-                ss_vg = float(st.session_state[ss_key])
-                ss_idx = int((sweep_df["GateV"] - ss_vg).abs().idxmin())
+                ss_idx = ss_auto_idx
+                ss_vg = float(sweep_df["GateV"].iloc[ss_idx])
                 ss_value = (
                     float(ss_values[ss_idx])
                     if np.isfinite(ss_values[ss_idx]) else np.nan
@@ -1702,29 +1719,26 @@ with main_content:
                 )
 
             def dual_metric_box(title, f_value, r_value, renderer_f=None, renderer_r=None):
-                with st.container(border=True):
+                with st.container(border=False):
                     st.markdown(
-                        f"<div style='font-size:15px; font-weight:750; margin-bottom:5px;'>"
-                        f"{title}</div>",
+                        f"<div class='metric-title'>{title}</div>",
                         unsafe_allow_html=True,
                     )
-                    left, right = st.columns(2, gap="small")
+                    left, right = st.columns([1, 1], gap="medium")
                     with left:
                         st.markdown(
-                            f"<div style='color:#2E60AB; font-size:12px; font-weight:700;'>"
-                            f"Forward</div><div style='font-size:20px; font-weight:750;'>"
-                            f"{f_value}</div>",
+                            f"<div style='color:#2E60AB;font-size:12px;font-weight:750;'>"
+                            f"Forward</div><div class='metric-value'>{f_value}</div>",
                             unsafe_allow_html=True,
                         )
                         if renderer_f is not None:
                             renderer_f(left)
                     with right:
                         st.markdown(
-                            f"<div style='border-left:1px solid rgba(120,120,120,.35); "
-                            f"padding-left:10px; color:#D94B45; font-size:12px; font-weight:700;'>"
-                            f"Reverse</div><div style='border-left:1px solid rgba(120,120,120,.35); "
-                            f"padding-left:10px; font-size:20px; font-weight:750;'>"
-                            f"{r_value}</div>",
+                            f"<div style='border-left:1px solid rgba(120,120,120,.28);"
+                            f"padding-left:8px;color:#D94B45;font-size:12px;font-weight:750;'>"
+                            f"Reverse</div><div class='metric-value' style='border-left:1px solid "
+                            f"rgba(120,120,120,.28);padding-left:8px;'>{r_value}</div>",
                             unsafe_allow_html=True,
                         )
                         if renderer_r is not None:
@@ -1743,8 +1757,8 @@ with main_content:
                 cols=4,
                 subplot_titles=(
                     "Transfer (Log)",
-                    "Transfer (Linear)",
                     graph_mobility_title,
+                    "Transfer (Linear)",
                     "Subthreshold Swing",
                 ),
                 horizontal_spacing=0.085,
@@ -1755,7 +1769,7 @@ with main_content:
             vg_bwd = bwd["GateV"]
             id_bwd = bwd["DrainI_active"]
 
-            for col_num in (1, 2):
+            for col_num in (1, 3):
                 fig.add_trace(
                     go.Scatter(
                         x=vg_fwd, y=np.abs(id_fwd), name="Id Forward",
@@ -1777,7 +1791,7 @@ with main_content:
                 ig_b = gate_i.iloc[
                     bwd["__source_index"].astype(int).to_numpy()
                 ].reset_index(drop=True)
-                for col_num in (1, 2):
+                for col_num in (1, 3):
                     fig.add_trace(
                         go.Scatter(
                             x=vg_fwd, y=np.abs(ig_f), name="Ig Forward",
@@ -1802,7 +1816,7 @@ with main_content:
             )
             for state, symbol, color, label, row_key in marker_specs:
                 row_data = state[row_key]
-                for col_num in (1, 2):
+                for col_num in (1, 3):
                     fig.add_trace(
                         go.Scatter(
                             x=[float(row_data["GateV"])],
@@ -1818,17 +1832,17 @@ with main_content:
             fig.add_trace(
                 go.Scatter(x=vg_fwd, y=res["mu_fwd"], name="Mobility Forward",
                            line=dict(color="blue"), showlegend=False),
-                row=1, col=3,
+                row=1, col=2,
             )
             fig.add_trace(
                 go.Scatter(x=vg_bwd, y=res["mu_bwd"], name="Mobility Reverse",
                            line=dict(color="red"), showlegend=False),
-                row=1, col=3,
+                row=1, col=2,
             )
             for state in (f_state, r_state):
                 fig.add_vline(
                     x=state["peak_vg"], line_dash="dot", line_width=1.5,
-                    line_color=state["color"], row=1, col=3,
+                    line_color=state["color"], row=1, col=2,
                 )
 
             # Peak-elimination targets are shown as X marks before removal.
@@ -1852,7 +1866,7 @@ with main_content:
                             "<br>Mobility=%{y:.3g}<extra></extra>"
                         ),
                     ),
-                    row=1, col=3,
+                    row=1, col=2,
                 )
 
             # SS curves. Selected SS values use horizontal dotted lines.
@@ -1890,7 +1904,7 @@ with main_content:
                             line=dict(color=state["color"], dash="dot", width=1.6),
                             showlegend=False,
                         ),
-                        row=1, col=2,
+                        row=1, col=3,
                     )
                 fig.add_trace(
                     go.Scatter(
@@ -1905,7 +1919,7 @@ with main_content:
                         ),
                         showlegend=False,
                     ),
-                    row=1, col=2,
+                    row=1, col=3,
                 )
 
             common_axis = dict(
@@ -1918,19 +1932,19 @@ with main_content:
                 **common_axis,
             )
             fig.update_yaxes(
-                title_text="Current (A)", row=1, col=2, **common_axis,
+                title_text="Mobility (cm²/V·s)", row=1, col=2,
+                **common_axis,
             )
             fig.update_yaxes(
-                title_text="Mobility (cm²/V·s)", row=1, col=3,
-                **common_axis,
+                title_text="Current (A)", row=1, col=3, **common_axis,
             )
             fig.update_yaxes(
                 title_text="SS (mV/dec)", row=1, col=4, **common_axis,
             )
             fig.update_layout(
-                height=350,
+                height=330,
                 template="plotly_white",
-                margin=dict(t=38, b=22, l=36, r=10),
+                margin=dict(t=34, b=8, l=32, r=8),
                 showlegend=False,
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -2022,7 +2036,7 @@ with main_content:
 
             parameter_columns = st.columns(4, gap="small")
 
-            # 1) Transfer (Log): ON/OFF ratio above stacked ON and OFF boxes
+            # 1) Transfer (Log): ratio, ON, OFF
             with parameter_columns[0]:
                 st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
                 st.markdown(ratio_line, unsafe_allow_html=True)
@@ -2043,6 +2057,7 @@ with main_content:
                         f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
+                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
                 dual_metric_box(
                     "OFF Current / Width (A/μm)",
                     sci(f_state["off_density"]),
@@ -2062,46 +2077,19 @@ with main_content:
                 )
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # 2) Transfer (Linear): Hysteresis above Vth box
+            # 2) Mobility: mobility slider and peak elimination
             with parameter_columns[1]:
                 st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
-                st.markdown(hysteresis_line, unsafe_allow_html=True)
-                dual_metric_box(
-                    "Vₜₕ (V)",
-                    f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
-                    f"{r_state['vth']:.2f}" if np.isfinite(r_state["vth"]) else "N/A",
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["vth_key"], f_state["peak_default"],
-                        "Forward Vth Vg",
-                        f"vth_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["vth_key"], r_state["peak_default"],
-                        "Reverse Vth Vg",
-                        f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # 3) Mobility: mobility + peak elimination in one region
-            with parameter_columns[2]:
-                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
-                # Match the emphasized ON/OFF header height, so the mobility box
-                # begins exactly at the top edge of the ON box.
-                st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
-                with st.container(border=True):
+                with st.container(border=False):
                     st.markdown(
-                        "<div style='font-size:15px;font-weight:750;"
-                        "margin-bottom:4px;'>Mobility (cm²/V·s)</div>",
+                        "<div class='metric-title'>Mobility (cm²/V·s)</div>",
                         unsafe_allow_html=True,
                     )
-                    mob_f_col, mob_r_col = st.columns(2, gap="small")
-
+                    mob_f_col, mob_r_col = st.columns([1, 1], gap="medium")
                     with mob_f_col:
                         st.markdown(
-                            f"<div style='color:#2E60AB;font-size:12px;"
-                            f"font-weight:700;'>Forward</div>"
-                            f"<div style='font-size:20px;font-weight:750;'>"
+                            f"<div style='color:#2E60AB;font-size:12px;font-weight:750;'>"
+                            f"Forward</div><div class='metric-value'>"
                             f"{f_state['mobility']:.2f}</div>",
                             unsafe_allow_html=True,
                         )
@@ -2111,22 +2099,20 @@ with main_content:
                             f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
                         )
                         st.markdown(
-                            "<div style='font-size:11px;font-weight:750;"
-                            "margin-top:4px;'>Peak Elimination</div>",
+                            "<div style='font-size:12px;font-weight:800;margin-top:8px;'>"
+                            "Peak Elimination</div>",
                             unsafe_allow_html=True,
                         )
                         render_removal_control(
                             f_state, mob_f_col, keys["removed_fwd"],
                             keys["remove_slider_fwd"], keys["force_auto_peak_fwd"],
                         )
-
                     with mob_r_col:
                         st.markdown(
-                            f"<div style='border-left:1px solid rgba(120,120,120,.35);"
-                            f"padding-left:8px;color:#D94B45;font-size:12px;"
-                            f"font-weight:700;'>Reverse</div>"
-                            f"<div style='border-left:1px solid rgba(120,120,120,.35);"
-                            f"padding-left:8px;font-size:20px;font-weight:750;'>"
+                            f"<div style='border-left:1px solid rgba(120,120,120,.28);"
+                            f"padding-left:8px;color:#D94B45;font-size:12px;font-weight:750;'>"
+                            f"Reverse</div><div class='metric-value' style='border-left:1px "
+                            f"solid rgba(120,120,120,.28);padding-left:8px;'>"
                             f"{r_state['mobility']:.2f}</div>",
                             unsafe_allow_html=True,
                         )
@@ -2136,9 +2122,7 @@ with main_content:
                             f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
                         )
                         st.markdown(
-                            "<div style='font-size:11px;font-weight:750;"
-                            "margin-top:4px;border-left:1px solid "
-                            "rgba(120,120,120,.35);padding-left:8px;'>"
+                            "<div style='font-size:12px;font-weight:800;margin-top:8px;'>"
                             "Peak Elimination</div>",
                             unsafe_allow_html=True,
                         )
@@ -2146,29 +2130,39 @@ with main_content:
                             r_state, mob_r_col, keys["removed_bwd"],
                             keys["remove_slider_bwd"], keys["force_auto_peak_bwd"],
                         )
-                    # Extend the box to the bottom edge of the OFF box.
-                    st.markdown("<div style='height:54px;'></div>", unsafe_allow_html=True)
+                    # Align the bottom of this region with the OFF section.
+                    st.markdown("<div style='height:42px;'></div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # 4) SS curve: SS
+            # 3) Transfer (Linear): hysteresis and Vth values derived from mobility points
+            with parameter_columns[2]:
+                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
+                st.markdown(hysteresis_line, unsafe_allow_html=True)
+                dual_metric_box(
+                    "Vₜₕ from Mobility Tangent (V)",
+                    f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
+                    f"{r_state['vth']:.2f}" if np.isfinite(r_state["vth"]) else "N/A",
+                )
+                st.markdown(
+                    "<div style='font-size:12px;line-height:1.35;margin-top:8px;'>"
+                    "Mobility의 Forward/Reverse Vg를 조절하면 해당 지점의 "
+                    "linear-transfer 접선과 Vₜₕ가 함께 갱신됩니다.</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # 4) SS curve: automatic values only
             with parameter_columns[3]:
                 st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
                 dual_metric_box(
                     "SS (mV/dec)",
                     f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
                     f"{r_state['ss']:.1f}" if np.isfinite(r_state["ss"]) else "N/A",
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["ss_key"],
-                        float(f_state["df"]["GateV"].iloc[f_state["ss_auto_idx"]]),
-                        "Forward SS Vg",
-                        f"ss_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["ss_key"],
-                        float(r_state["df"]["GateV"].iloc[r_state["ss_auto_idx"]]),
-                        "Reverse SS Vg",
-                        f"ss_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
+                )
+                st.markdown(
+                    "<div style='font-size:12px;line-height:1.35;margin-top:8px;'>"
+                    "각 sweep의 자동 최적 SS 값입니다.</div>",
+                    unsafe_allow_html=True,
                 )
                 st.markdown("</div>", unsafe_allow_html=True)
 
