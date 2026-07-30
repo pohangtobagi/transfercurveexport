@@ -43,6 +43,16 @@ div[data-testid="stSlider"] div[role="slider"] > div {
     text-align: center;
     padding: 7px 4px 2px 4px;
 }
+
+/* Keep the controls visually attached to their corresponding plots */
+div[data-testid="stPlotlyChart"] { margin-bottom: -14px !important; }
+.parameter-region { margin-top: 0 !important; min-height: 548px; }
+.parameter-emphasis {
+    font-size: 16px;
+    font-weight: 850;
+    text-align: left !important;
+    padding: 0 4px 5px 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -226,18 +236,25 @@ def clear_all_logs():
     save_projects_state()
 
 
-def remove_mobility_point(removed_key, source_idx, force_key):
+def remove_mobility_point(
+    removed_key, source_idx, force_key, selector_keys=()
+):
     removed = list(st.session_state.get(removed_key, []))
     source_idx = int(source_idx)
     if source_idx not in removed:
         removed.append(source_idx)
     st.session_state[removed_key] = removed
     st.session_state[force_key] = True
+    # Recalculate every default from the remaining active data on rerun.
+    for selector_key in selector_keys:
+        st.session_state.pop(selector_key, None)
 
 
-def reset_mobility_points(removed_key, force_key):
+def reset_mobility_points(removed_key, force_key, selector_keys=()):
     st.session_state[removed_key] = []
     st.session_state[force_key] = True
+    for selector_key in selector_keys:
+        st.session_state.pop(selector_key, None)
 
 
 def set_state_value(state_key, value):
@@ -1778,6 +1795,30 @@ with main_content:
                     line_color=state["color"], row=1, col=3,
                 )
 
+            # Peak-elimination targets are shown as X marks before removal.
+            elimination_specs = (
+                (selected_f_row, selected_f_mu, "blue"),
+                (selected_b_row, selected_b_mu, "red"),
+            )
+            for selected_row, selected_mu, selected_color in elimination_specs:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(selected_row["GateV"])],
+                        y=[float(selected_mu)],
+                        mode="markers",
+                        marker=dict(
+                            symbol="x", size=12, color=selected_color,
+                            line=dict(width=2, color=selected_color),
+                        ),
+                        showlegend=False,
+                        hovertemplate=(
+                            "Elimination target<br>Vg=%{x:.3g} V"
+                            "<br>Mobility=%{y:.3g}<extra></extra>"
+                        ),
+                    ),
+                    row=1, col=3,
+                )
+
             # SS curves. Selected SS values use horizontal dotted lines.
             fig.add_trace(
                 go.Scatter(x=vg_fwd, y=f_state["ss_curve"], name="SS Forward",
@@ -1895,6 +1936,11 @@ with main_content:
                             removed_key,
                             int(removal_row["__source_index"]),
                             force_key,
+                            (
+                                state["peak_key"], state["on_key"],
+                                state["off_key"], state["vth_key"],
+                                state["ss_key"], remove_key,
+                            ),
                         ),
                     )
                     reset_col.button(
@@ -1905,7 +1951,15 @@ with main_content:
                         ),
                         use_container_width=True,
                         on_click=reset_mobility_points,
-                        args=(removed_key, force_key),
+                        args=(
+                            removed_key,
+                            force_key,
+                            (
+                                state["peak_key"], state["on_key"],
+                                state["off_key"], state["vth_key"],
+                                state["ss_key"], remove_key,
+                            ),
+                        ),
                     )
                     container.caption(
                         f"Removed: {len(st.session_state.get(removed_key, []))}"
@@ -1932,9 +1986,10 @@ with main_content:
 
             parameter_columns = st.columns(4, gap="small")
 
-            # 1) Transfer (Log): ON / OFF / ON-OFF ratio
+            # 1) Transfer (Log): ON/OFF ratio above stacked ON and OFF boxes
             with parameter_columns[0]:
                 st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
+                st.markdown(ratio_line, unsafe_allow_html=True)
                 dual_metric_box(
                     "ON Current / Width (A/μm)",
                     sci(f_state["on_density"]),
@@ -1969,12 +2024,12 @@ with main_content:
                         f"off_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
-                st.markdown(ratio_line, unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # 2) Transfer (Linear): Vth / Hysteresis
+            # 2) Transfer (Linear): Hysteresis above Vth box
             with parameter_columns[1]:
                 st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
+                st.markdown(hysteresis_line, unsafe_allow_html=True)
                 dual_metric_box(
                     "Vₜₕ (V)",
                     f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
@@ -1990,7 +2045,6 @@ with main_content:
                         f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
-                st.markdown(hysteresis_line, unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             # 3) Mobility: mobility + peak elimination in one region
@@ -2053,6 +2107,8 @@ with main_content:
                             r_state, mob_r_col, keys["removed_bwd"],
                             keys["remove_slider_bwd"], keys["force_auto_peak_bwd"],
                         )
+                    # Match the visual depth of the stacked ON and OFF boxes.
+                    st.markdown("<div style='height:118px;'></div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             # 4) SS curve: SS
