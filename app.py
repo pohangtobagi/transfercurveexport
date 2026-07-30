@@ -107,6 +107,181 @@ def clear_all_logs():
         folders[name] = []
 
 
+def sci(value, digits=2):
+    """HTML scientific notation: xx × 10^xx."""
+    if not np.isfinite(value) or value == 0:
+        return "N/A" if not np.isfinite(value) else "0"
+    exp = int(np.floor(np.log10(abs(value))))
+    coef = value / (10 ** exp)
+    return f"{coef:.{digits}f} × 10<sup>{exp}</sup>"
+
+
+def sci_plain(value, digits=2):
+    """Excel/plain-text scientific notation."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+
+    if not np.isfinite(numeric):
+        return "N/A"
+    if numeric == 0:
+        return "0"
+
+    exp = int(np.floor(np.log10(abs(numeric))))
+    coef = numeric / (10 ** exp)
+    return f"{coef:.{digits}f} × 10^{exp}"
+
+
+
+
+EXPORT_COLUMNS = [
+    "File",
+    "Drain voltage",
+    "Linear or saturation",
+    "Gate voltage range",
+    "Gate voltage step",
+    "On current (A/um)",
+    "Off current (A/um)",
+    "on-off ratio",
+    "Field-effect mobility",
+    "threshold voltage (V)",
+    "subthreshold swing (mV/dec)",
+]
+
+
+def log_dataframe(folder_name):
+    folders = st.session_state["analysis_log_folders"]
+    records = folders.get(folder_name, [])
+    if not records:
+        return pd.DataFrame(columns=EXPORT_COLUMNS)
+
+    rows = []
+    for record in records:
+        rows.append({
+            "File": record.get("File", ""),
+            "Drain voltage": record.get("Drain voltage (V)", np.nan),
+            "Linear or saturation": record.get("Operating mode", ""),
+            "Gate voltage range": record.get("Gate voltage range", ""),
+            "Gate voltage step": record.get("Gate voltage step (V)", np.nan),
+            "On current (A/um)": sci_plain(
+                record.get("ON current / Width (A/μm)", np.nan)
+            ),
+            "Off current (A/um)": sci_plain(
+                record.get("OFF current / Width (A/μm)", np.nan)
+            ),
+            "on-off ratio": sci_plain(
+                record.get("ON/OFF ratio", np.nan)
+            ),
+            "Field-effect mobility": record.get(
+                "Forward mobility (cm²/V·s)", np.nan
+            ),
+            "threshold voltage (V)": record.get(
+                "Forward Vth (V)", np.nan
+            ),
+            "subthreshold swing (mV/dec)": record.get(
+                "Forward SS (mV/dec)", np.nan
+            ),
+        })
+
+    return pd.DataFrame(rows, columns=EXPORT_COLUMNS)
+
+
+def autosize_worksheet(ws):
+    """Adjust each column width based on cell content."""
+    for column_cells in ws.columns:
+        max_length = 0
+        column_letter = get_column_letter(column_cells[0].column)
+
+        for cell in column_cells:
+            value = "" if cell.value is None else str(cell.value)
+            # multiline content: use longest line
+            length = max((len(line) for line in value.splitlines()), default=0)
+            max_length = max(max_length, length)
+
+        ws.column_dimensions[column_letter].width = min(max(max_length + 3, 12), 45)
+
+
+def style_parameter_sheet(ws):
+    """Light-green header row with readable alignment."""
+    header_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
+    header_font = Font(bold=True, color="006100")
+
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    autosize_worksheet(ws)
+
+
+def folder_excel_bytes(folder_name):
+    df = log_dataframe(folder_name)
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Parameters", index=False)
+        ws = writer.book["Parameters"]
+        style_parameter_sheet(ws)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+def safe_excel_filename(name):
+    safe = re.sub(r'[\\/:*?"<>|]+', "_", str(name)).strip()
+    return safe or "FET_Analysis_Log"
+
+
+initialize_log_state()
+
+
+# ============================================================
+# Session log / folder helpers
+# ============================================================
+def initialize_log_state():
+    if "analysis_log_folders" not in st.session_state:
+        st.session_state["analysis_log_folders"] = {}
+    if "active_log_folder" not in st.session_state:
+        st.session_state["active_log_folder"] = None
+
+
+def create_log_folder(folder_name):
+    name = str(folder_name).strip()
+    if not name:
+        return False, "폴더 이름을 입력하세요."
+    folders = st.session_state["analysis_log_folders"]
+    if name in folders:
+        return False, "같은 이름의 폴더가 이미 있습니다."
+    folders[name] = []
+    st.session_state["active_log_folder"] = name
+    return True, f"'{name}' 폴더를 생성했습니다."
+
+
+def delete_log_entry(folder_name, entry_id):
+    folders = st.session_state["analysis_log_folders"]
+    if folder_name not in folders:
+        return
+    folders[folder_name] = [
+        item for item in folders[folder_name]
+        if item.get("_log_id") != entry_id
+    ]
+
+
+def clear_log_folder(folder_name):
+    folders = st.session_state["analysis_log_folders"]
+    if folder_name in folders:
+        folders[folder_name] = []
+
+
+def clear_all_logs():
+    folders = st.session_state["analysis_log_folders"]
+    for name in list(folders.keys()):
+        folders[name] = []
+
+
 EXPORT_COLUMNS = [
     "File",
     "Drain voltage",
@@ -347,25 +522,6 @@ def make_card(title, value, color):
         <p style='font-size:26px; font-weight:bold; color:{color}; margin:0; line-height:1.2;'>{value}</p>
     </div>
     """
-
-
-def sci(value, digits=2):
-    """HTML scientific notation: xx × 10^xx."""
-    if not np.isfinite(value) or value == 0:
-        return "N/A" if not np.isfinite(value) else "0"
-    exp = int(np.floor(np.log10(abs(value))))
-    coef = value / (10 ** exp)
-    return f"{coef:.{digits}f} × 10<sup>{exp}</sup>"
-
-
-def sci_plain(value, digits=2):
-    """Excel/plain-text scientific notation."""
-    if not np.isfinite(value) or value == 0:
-        return "N/A" if not np.isfinite(value) else "0"
-    exp = int(np.floor(np.log10(abs(value))))
-    coef = value / (10 ** exp)
-    return f"{coef:.{digits}f} × 10^{exp}"
-
 
 
 def calculate_ss(id_vals, vg_vals):
@@ -691,6 +847,7 @@ def render_discrete_vg_control(
     active_df,
     default_value,
     button_prefix,
+    parent=None,
 ):
     """
     − 버튼 | 실제 측정 Vg select_slider | + 버튼
@@ -706,8 +863,9 @@ def render_discrete_vg_control(
 
     options = [float(v) for v in values]
 
-    st.sidebar.markdown(f"**{title}**")
-    minus_col, slider_col, plus_col = st.sidebar.columns([1, 5, 1])
+    ui = parent if parent is not None else st.sidebar
+    ui.markdown(f"**{title}**")
+    minus_col, slider_col, plus_col = ui.columns([1, 5, 1])
 
     minus_col.button(
         "−",
@@ -765,6 +923,129 @@ def consume_restore_value(key, default=None):
     return st.session_state.pop(key, default)
 
 
+
+# ============================================================
+# Sidebar: Project manager
+# ============================================================
+initialize_log_state()
+
+st.sidebar.header("Projects")
+st.sidebar.caption("프로젝트를 생성하거나 선택한 뒤 분석을 진행하세요.")
+
+project_name_input = st.sidebar.text_input(
+    "New project name",
+    key="new_project_name_sidebar",
+    placeholder="예: 85K, Device batch A",
+)
+
+if st.sidebar.button("＋ Create Project", use_container_width=True):
+    ok, message = create_log_folder(project_name_input)
+    if ok:
+        st.sidebar.success(message)
+        st.rerun()
+    else:
+        st.sidebar.warning(message)
+
+project_names = list(st.session_state["analysis_log_folders"].keys())
+
+if project_names:
+    project_display_names = [f"📁  {name}" for name in project_names]
+    selected_display = st.sidebar.radio(
+        "Project list",
+        project_display_names,
+        index=(
+            project_names.index(st.session_state["active_log_folder"])
+            if st.session_state.get("active_log_folder") in project_names
+            else 0
+        ),
+        key="project_radio_sidebar",
+        label_visibility="collapsed",
+    )
+    active_project = project_names[project_display_names.index(selected_display)]
+    st.session_state["active_log_folder"] = active_project
+
+    active_logs = st.session_state["analysis_log_folders"][active_project]
+    st.sidebar.caption(f"Selected: {active_project} · {len(active_logs)} logs")
+
+    if active_logs:
+        st.sidebar.download_button(
+            "Export Project to Excel",
+            data=folder_excel_bytes(active_project),
+            file_name=f"{safe_excel_filename(active_project)}_FET_parameters.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"sidebar_export_{active_project}",
+        )
+
+        st.sidebar.markdown("**Saved logs**")
+        for log_idx, log_record in enumerate(active_logs, start=1):
+            log_name_col, log_delete_col = st.sidebar.columns([6, 1])
+
+            if log_name_col.button(
+                f"📄 {log_idx}. {log_record.get('File', '')} · {log_record.get('Sheet', '')}",
+                key=f"open_log_{active_project}_{log_record['_log_id']}",
+                use_container_width=True,
+                help="저장 당시 분석 상태로 열기",
+            ):
+                restore_log_state(log_record)
+                st.rerun()
+
+            if log_delete_col.button(
+                "✕",
+                key=f"sidebar_delete_{active_project}_{log_record['_log_id']}",
+                help="이 로그 삭제",
+                use_container_width=True,
+            ):
+                delete_log_entry(active_project, log_record["_log_id"])
+                st.rerun()
+    else:
+        st.sidebar.info("이 프로젝트에는 저장된 로그가 없습니다.")
+
+    project_action_1, project_action_2 = st.sidebar.columns(2)
+    if project_action_1.button(
+        "Clear Logs",
+        key=f"sidebar_clear_{active_project}",
+        use_container_width=True,
+    ):
+        clear_log_folder(active_project)
+        st.rerun()
+
+    if project_action_2.button(
+        "Delete Project",
+        key=f"sidebar_delete_project_{active_project}",
+        use_container_width=True,
+    ):
+        del st.session_state["analysis_log_folders"][active_project]
+        st.session_state["active_log_folder"] = None
+        st.rerun()
+else:
+    active_project = None
+    st.session_state["active_log_folder"] = None
+    st.sidebar.info("먼저 개인 프로젝트를 생성하세요.")
+
+st.sidebar.markdown("---")
+
+# ============================================================
+# Device information state
+# ============================================================
+restored_mode = st.session_state.get("restored_operating_mode")
+if "operating_mode_widget" not in st.session_state:
+    st.session_state["operating_mode_widget"] = (
+        restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
+    )
+if "width_widget" not in st.session_state:
+    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1000.0)
+if "length_widget" not in st.session_state:
+    st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
+if "cox_widget" not in st.session_state:
+    st.session_state["cox_widget"] = float(st.session_state.get("restored_Cox_nf") or 34.5)
+
+operating_mode = st.session_state["operating_mode_widget"]
+W = float(st.session_state["width_widget"])
+L = float(st.session_state["length_widget"])
+Cox_nf = float(st.session_state["cox_widget"])
+Cox = Cox_nf * 1e-9
+
 # ============================================================
 # Upload
 # ============================================================
@@ -807,6 +1088,9 @@ with device_col:
     )
     Cox = Cox_nf * 1e-9
 
+    # Analysis controls will be rendered here after data are loaded.
+    right_controls = st.container()
+
 with main_col:
     uploaded_file = st.file_uploader(
         "측정된 엑셀 파일을 업로드하세요",
@@ -832,21 +1116,20 @@ if uploaded_file:
         st.stop()
 
     st.sidebar.markdown("---")
-    sheet_options = target_sheets + ["Average (All Sheets)"]
+    # Select Data Sheet UI removed.
+    # Use restored sheet when valid; otherwise prefer "Data", then first valid sheet.
     restored_sheet = st.session_state.get("restored_sheet")
-    sheet_index = sheet_options.index(restored_sheet) if restored_sheet in sheet_options else 0
-
-    selected_sheet = st.sidebar.selectbox(
-        "📂 Select Data Sheet",
-        sheet_options,
-        index=sheet_index,
-        key="sheet_selector_widget",
-    )
+    if restored_sheet in target_sheets:
+        selected_sheet = restored_sheet
+    elif "Data" in target_sheets:
+        selected_sheet = "Data"
+    else:
+        selected_sheet = target_sheets[0]
 
     # ========================================================
     # Average mode
     # ========================================================
-    if selected_sheet == "Average (All Sheets)":
+    if False:
         rows = []
 
         for sheet in target_sheets:
@@ -946,9 +1229,9 @@ if uploaded_file:
         # ====================================================
         # Peak point adjustment
         # ====================================================
-        st.sidebar.markdown("---")
-        st.sidebar.header("Mobility Peak Point Adjustment")
-        st.sidebar.caption(
+        right_controls.markdown("---")
+        right_controls.header("Mobility Peak Point Adjustment")
+        right_controls.caption(
             "선택한 Vg 지점의 mobility와 Vth가 큰 카드에 반영됩니다. "
             "−/+ 버튼은 실제 측정 Vg 한 행씩 이동합니다."
         )
@@ -960,6 +1243,7 @@ if uploaded_file:
             active_df=fwd,
             default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
             button_prefix=f"peak_f_{file_id}_{selected_sheet}_{operating_mode}",
+            parent=right_controls,
         )
         peak_b_vg = render_discrete_vg_control(
             title="Backward peak Vg",
@@ -968,6 +1252,7 @@ if uploaded_file:
             active_df=bwd,
             default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
             button_prefix=f"peak_b_{file_id}_{selected_sheet}_{operating_mode}",
+            parent=right_controls,
         )
 
         # peak control 변경값을 즉시 parameter에 반영
@@ -980,12 +1265,12 @@ if uploaded_file:
             operating_mode, W,
         )
 
-        st.sidebar.caption(
+        right_controls.caption(
             f"Fwd μ = {params['mu_fwd']:.3g} cm²/V·s · "
             f"Bwd μ = {params['mu_bwd']:.3g} cm²/V·s"
         )
 
-        auto_col_f, auto_col_b = st.sidebar.columns(2)
+        auto_col_f, auto_col_b = right_controls.columns(2)
         if auto_col_f.button("Auto Max Fwd", use_container_width=True):
             st.session_state[keys["force_auto_peak_fwd"]] = True
             st.rerun()
@@ -996,9 +1281,9 @@ if uploaded_file:
         # ====================================================
         # Manual removal controls
         # ====================================================
-        st.sidebar.markdown("---")
-        st.sidebar.header("Manual Mobility Point Removal")
-        st.sidebar.caption(
+        right_controls.markdown("---")
+        right_controls.header("Manual Mobility Point Removal")
+        right_controls.caption(
             "제거할 mobility Vg를 선택한 뒤 Remove를 누르세요. "
             "해당 원래 행은 모든 plot과 parameter 계산에서 제외됩니다."
         )
@@ -1010,15 +1295,16 @@ if uploaded_file:
             active_df=fwd,
             default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
             button_prefix=f"remove_f_{file_id}_{selected_sheet}_{operating_mode}",
+            parent=right_controls,
         )
         selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
         selected_f_mu = float(res["mu_fwd"][selected_f_idx])
-        st.sidebar.caption(
+        right_controls.caption(
             f"Vg = {selected_f_row['GateV']:.2f} V · "
             f"Mobility = {selected_f_mu:.3g} cm²/V·s"
         )
 
-        fcol1, fcol2 = st.sidebar.columns(2)
+        fcol1, fcol2 = right_controls.columns(2)
         if fcol1.button("Remove Fwd", use_container_width=True):
             source_idx = int(selected_f_row["__source_index"])
             removed = list(st.session_state[keys["removed_fwd"]])
@@ -1040,15 +1326,16 @@ if uploaded_file:
             active_df=bwd,
             default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
             button_prefix=f"remove_b_{file_id}_{selected_sheet}_{operating_mode}",
+            parent=right_controls,
         )
         selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
         selected_b_mu = float(res["mu_bwd"][selected_b_idx])
-        st.sidebar.caption(
+        right_controls.caption(
             f"Vg = {selected_b_row['GateV']:.2f} V · "
             f"Mobility = {selected_b_mu:.3g} cm²/V·s"
         )
 
-        bcol1, bcol2 = st.sidebar.columns(2)
+        bcol1, bcol2 = right_controls.columns(2)
         if bcol1.button("Remove Bwd", use_container_width=True):
             source_idx = int(selected_b_row["__source_index"])
             removed = list(st.session_state[keys["removed_bwd"]])
@@ -1065,16 +1352,16 @@ if uploaded_file:
 
         removed_f_count = len(st.session_state[keys["removed_fwd"]])
         removed_b_count = len(st.session_state[keys["removed_bwd"]])
-        st.sidebar.caption(
+        right_controls.caption(
             f"Removed: Forward {removed_f_count} · Backward {removed_b_count}"
         )
 
         # ====================================================
         # Transfer curve point inspection
         # ====================================================
-        st.sidebar.markdown("---")
-        st.sidebar.header("Transfer Current Point")
-        st.sidebar.caption(
+        right_controls.markdown("---")
+        right_controls.header("Transfer Current Point")
+        right_controls.caption(
             "실제 측정 Vg 한 칸씩 이동하며 |DrainI|/Width를 확인합니다."
         )
 
@@ -1085,6 +1372,7 @@ if uploaded_file:
             active_df=fwd,
             default_value=float(fwd["GateV"].iloc[0]),
             button_prefix=f"current_f_{file_id}_{selected_sheet}_{operating_mode}",
+            parent=right_controls,
         )
         current_b_vg = render_discrete_vg_control(
             title="Backward transfer Vg",
@@ -1093,6 +1381,7 @@ if uploaded_file:
             active_df=bwd,
             default_value=float(bwd["GateV"].iloc[0]),
             button_prefix=f"current_b_{file_id}_{selected_sheet}_{operating_mode}",
+            parent=right_controls,
         )
 
         current_f_idx, current_f_row, current_f_density = current_density_at_vg(
@@ -1102,7 +1391,7 @@ if uploaded_file:
             bwd, current_b_vg, W
         )
 
-        st.sidebar.caption(
+        right_controls.caption(
             f"Fwd: {sci_plain(current_f_density)} A/μm · "
             f"Bwd: {sci_plain(current_b_density)} A/μm"
         )
