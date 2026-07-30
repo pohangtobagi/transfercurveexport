@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -2092,10 +2092,17 @@ with main_content:
                 remove_idx = int(
                     (state["df"]["GateV"] - remove_vg).abs().idxmin()
                 )
+                mu_values = np.asarray(state["mu_curve"], dtype=float)
+                marker_y = (
+                    float(mu_values[remove_idx])
+                    if 0 <= remove_idx < len(mu_values)
+                    and np.isfinite(mu_values[remove_idx])
+                    else float(state["mobility"])
+                )
                 fig.add_trace(
                     go.Scatter(
                         x=[float(state["df"]["GateV"].iloc[remove_idx])],
-                        y=[float(state["mobility_curve"][remove_idx])],
+                        y=[marker_y],
                         mode="markers",
                         marker=dict(
                             size=12,
