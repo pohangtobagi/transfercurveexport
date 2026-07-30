@@ -201,6 +201,20 @@ def clear_all_logs():
     save_projects_state()
 
 
+def remove_mobility_point(removed_key, source_idx, force_key):
+    removed = list(st.session_state.get(removed_key, []))
+    source_idx = int(source_idx)
+    if source_idx not in removed:
+        removed.append(source_idx)
+    st.session_state[removed_key] = removed
+    st.session_state[force_key] = True
+
+
+def reset_mobility_points(removed_key, force_key):
+    st.session_state[removed_key] = []
+    st.session_state[force_key] = True
+
+
 def sci(value, digits=2):
     """HTML scientific notation: xx × 10^xx."""
     if not np.isfinite(value) or value == 0:
@@ -349,14 +363,17 @@ def restore_log_state(record):
 
     mode = record.get("Operating mode")
     if mode in ["Linear", "Saturation"]:
-        st.session_state["operating_mode_widget"] = mode
+        st.session_state["restored_operating_mode"] = mode
 
     if record.get("Width (μm)") is not None:
-        st.session_state["width_widget"] = float(record["Width (μm)"])
+        st.session_state["restored_W"] = float(record["Width (μm)"])
     if record.get("Length (μm)") is not None:
-        st.session_state["length_widget"] = float(record["Length (μm)"])
+        st.session_state["restored_L"] = float(record["Length (μm)"])
     if record.get("Cox (nF/cm²)") is not None:
-        st.session_state["cox_widget"] = float(record["Cox (nF/cm²)"])
+        st.session_state["restored_Cox_nf"] = float(record["Cox (nF/cm²)"])
+
+    # Applied at the beginning of the next rerun, before these widgets exist.
+    st.session_state["device_restore_pending"] = True
 
     st.session_state["restored_peak_vg_fwd"] = record.get("Forward peak Vg (V)")
     st.session_state["restored_peak_vg_bwd"] = record.get("Backward peak Vg (V)")
@@ -393,6 +410,18 @@ def consume_restore_value(key, default=None):
 # Device information state
 # ============================================================
 restored_mode = st.session_state.get("restored_operating_mode")
+
+# A clicked log is handled on the next rerun before any device widget is created.
+if st.session_state.pop("device_restore_pending", False):
+    if restored_mode in ["Linear", "Saturation"]:
+        st.session_state["operating_mode_widget"] = restored_mode
+    if st.session_state.get("restored_W") is not None:
+        st.session_state["width_widget"] = float(st.session_state["restored_W"])
+    if st.session_state.get("restored_L") is not None:
+        st.session_state["length_widget"] = float(st.session_state["restored_L"])
+    if st.session_state.get("restored_Cox_nf") is not None:
+        st.session_state["cox_widget"] = float(st.session_state["restored_Cox_nf"])
+
 if "operating_mode_widget" not in st.session_state:
     st.session_state["operating_mode_widget"] = (
         restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
@@ -696,7 +725,7 @@ def auto_peak_index(mobility):
 def parameter_values(
     vg_fwd, id_fwd, gm_fwd, mu_fwd, idx_f,
     vg_bwd, id_bwd, gm_bwd, mu_bwd, idx_b,
-    mode, width
+    mode, width, on_current_override=None, off_current_override=None
 ):
     vg_fwd = pd.Series(vg_fwd).reset_index(drop=True)
     id_fwd = pd.Series(id_fwd).reset_index(drop=True)
@@ -729,8 +758,19 @@ def parameter_values(
     finite_abs = np.abs(full_current[np.isfinite(full_current)])
     positive_abs = finite_abs[finite_abs > 0]
 
-    on_current = float(np.max(finite_abs)) if len(finite_abs) else np.nan
-    off_current = float(np.min(positive_abs)) if len(positive_abs) else np.nan
+    default_on_current = float(np.max(finite_abs)) if len(finite_abs) else np.nan
+    default_off_current = float(np.min(positive_abs)) if len(positive_abs) else np.nan
+
+    on_current = (
+        float(on_current_override)
+        if on_current_override is not None and np.isfinite(on_current_override)
+        else default_on_current
+    )
+    off_current = (
+        float(off_current_override)
+        if off_current_override is not None and np.isfinite(off_current_override)
+        else default_off_current
+    )
 
     return {
         "mu_fwd": float(mu_fwd[idx_f]) if len(mu_fwd) else np.nan,
@@ -1227,6 +1267,7 @@ with main_content:
 
             # ====================================================
             # ====================================================
+            # ====================================================
             # Data title
             # ====================================================
             st.markdown(
@@ -1241,6 +1282,73 @@ with main_content:
             if parameter_direction_key not in st.session_state:
                 st.session_state[parameter_direction_key] = "Forward"
 
+            # Build one selectable current list covering both sweep directions.
+            current_options = []
+            for direction_name, sweep_df in (("Fwd", fwd), ("Rev", bwd)):
+                for row_idx, row in sweep_df.iterrows():
+                    abs_current = abs(float(row["DrainI_active"]))
+                    current_options.append(
+                        {
+                            "direction": direction_name,
+                            "row_idx": int(row_idx),
+                            "vg": float(row["GateV"]),
+                            "current": abs_current,
+                            "density": abs_current / float(W),
+                        }
+                    )
+
+            finite_option_indices = [
+                i for i, item in enumerate(current_options)
+                if np.isfinite(item["current"])
+            ]
+            positive_option_indices = [
+                i for i in finite_option_indices
+                if current_options[i]["current"] > 0
+            ]
+            default_on_idx = (
+                max(finite_option_indices, key=lambda i: current_options[i]["current"])
+                if finite_option_indices else 0
+            )
+            default_off_idx = (
+                min(positive_option_indices, key=lambda i: current_options[i]["current"])
+                if positive_option_indices else default_on_idx
+            )
+
+            on_select_key = f"on_current_select_{file_id}_{selected_sheet}_{operating_mode}"
+            off_select_key = f"off_current_select_{file_id}_{selected_sheet}_{operating_mode}"
+            valid_current_indices = list(range(len(current_options)))
+
+            if (
+                on_select_key not in st.session_state
+                or st.session_state[on_select_key] not in valid_current_indices
+            ):
+                st.session_state[on_select_key] = default_on_idx
+            if (
+                off_select_key not in st.session_state
+                or st.session_state[off_select_key] not in valid_current_indices
+            ):
+                st.session_state[off_select_key] = default_off_idx
+
+            selected_on_idx = int(st.session_state[on_select_key])
+            selected_off_idx = int(st.session_state[off_select_key])
+            selected_on_current = current_options[selected_on_idx]["current"]
+            selected_off_current = current_options[selected_off_idx]["current"]
+
+            peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
+            peak_b_vg = float(st.session_state[keys["peak_slider_bwd"]])
+            idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
+            idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
+
+            params = parameter_values(
+                fwd["GateV"], fwd["DrainI_active"],
+                res["gm_fwd"], res["mu_fwd"], idx_f,
+                bwd["GateV"], bwd["DrainI_active"],
+                res["gm_bwd"], res["mu_bwd"], idx_b,
+                operating_mode, W,
+                on_current_override=selected_on_current,
+                off_current_override=selected_off_current,
+            )
+
             overall_col, direction_col = st.columns([1, 1], gap="large")
 
             with overall_col:
@@ -1248,36 +1356,62 @@ with main_content:
                     "<h4 style='margin:2px 0 3px 0;'>Overall Data Parameters</h4>",
                     unsafe_allow_html=True,
                 )
+
                 o1, o2 = st.columns(2)
-                o1.markdown(
-                    make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
-                    unsafe_allow_html=True,
-                )
-                o2.markdown(
-                    make_card(
-                        "ON Current / Width (A/μm)",
-                        sci(params["on_density"]),
-                        "#5B5F97",
-                    ),
-                    unsafe_allow_html=True,
-                )
+                with o1:
+                    st.markdown(
+                        make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
+                        unsafe_allow_html=True,
+                    )
+                with o2:
+                    st.markdown(
+                        make_card(
+                            "Hysteresis (V)",
+                            f"{params['hysteresis']:.2f}",
+                            "#5B5F97",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
                 o3, o4 = st.columns(2)
-                o3.markdown(
-                    make_card(
-                        "OFF Current / Width (A/μm)",
-                        sci(params["off_density"]),
-                        "#5B5F97",
-                    ),
-                    unsafe_allow_html=True,
-                )
-                o4.markdown(
-                    make_card(
-                        "Hysteresis (V)",
-                        f"{params['hysteresis']:.2f}",
-                        "#5B5F97",
-                    ),
-                    unsafe_allow_html=True,
-                )
+                with o3:
+                    st.markdown(
+                        make_card(
+                            "ON Current / Width (A/μm)",
+                            sci(params["on_density"]),
+                            "#5B5F97",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    st.select_slider(
+                        "ON current point",
+                        options=valid_current_indices,
+                        key=on_select_key,
+                        format_func=lambda i: (
+                            f"{current_options[i]['direction']} "
+                            f"Vg={current_options[i]['vg']:.2f}"
+                        ),
+                        label_visibility="collapsed",
+                    )
+                with o4:
+                    st.markdown(
+                        make_card(
+                            "OFF Current / Width (A/μm)",
+                            sci(params["off_density"]),
+                            "#5B5F97",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    st.select_slider(
+                        "OFF current point",
+                        options=valid_current_indices,
+                        key=off_select_key,
+                        format_func=lambda i: (
+                            f"{current_options[i]['direction']} "
+                            f"Vg={current_options[i]['vg']:.2f}"
+                        ),
+                        label_visibility="collapsed",
+                    )
 
             with direction_col:
                 title_col, toggle_col = st.columns([1.4, 1.2])
@@ -1309,11 +1443,7 @@ with main_content:
 
                 p1, p2 = st.columns(2)
                 p1.markdown(
-                    make_card(
-                        "Peak Mobility (cm²/V·s)",
-                        f"{mu_value:.2f}",
-                        "#2E60AB",
-                    ),
+                    make_card("Peak Mobility (cm²/V·s)", f"{mu_value:.2f}", "#2E60AB"),
                     unsafe_allow_html=True,
                 )
                 p2.markdown(
@@ -1326,24 +1456,16 @@ with main_content:
                 )
                 p3, p4 = st.columns(2)
                 p3.markdown(
-                    make_card(
-                        "Peak Point, Vg (V)",
-                        f"{peak_value:.1f}",
-                        "#F18F01",
-                    ),
+                    make_card("Peak Point, Vg (V)", f"{peak_value:.1f}", "#F18F01"),
                     unsafe_allow_html=True,
                 )
                 p4.markdown(
-                    make_card(
-                        "SS (mV/dec)",
-                        f"{ss_value:.1f}",
-                        "#18A558",
-                    ),
+                    make_card("SS (mV/dec)", f"{ss_value:.1f}", "#18A558"),
                     unsafe_allow_html=True,
                 )
 
             # ====================================================
-            # Original-style point controls
+            # Restored original point controls
             # ====================================================
             control_direction_key = (
                 f"control_direction_{file_id}_{selected_sheet}_{operating_mode}"
@@ -1363,40 +1485,35 @@ with main_content:
             control_auto_idx = (
                 res["auto_idx_f"] if control_forward else res["auto_idx_b"]
             )
-
-            peak_control, removal_control, current_control = st.columns(
-                3, gap="large"
+            force_key = (
+                keys["force_auto_peak_fwd"] if control_forward
+                else keys["force_auto_peak_bwd"]
             )
 
-            # Mobility maximum point
+            peak_control, removal_control, current_control = st.columns(3, gap="large")
+
             with peak_control:
                 st.markdown("**Mobility Peak Point**")
                 peak_key = (
                     keys["peak_slider_fwd"] if control_forward
                     else keys["peak_slider_bwd"]
                 )
-                peak_vg = render_discrete_vg_control(
+                render_discrete_vg_control(
                     title="",
                     slider_label=f"{control_direction} peak Vg",
                     state_key=peak_key,
                     active_df=control_df,
-                    default_value=float(
-                        control_df["GateV"].iloc[control_auto_idx]
-                    ),
+                    default_value=float(control_df["GateV"].iloc[control_auto_idx]),
                     button_prefix=(
-                        f"peak_original_{control_short}_{file_id}_"
+                        f"peak_restored_{control_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     parent=peak_control,
                 )
-                force_key = (
-                    keys["force_auto_peak_fwd"] if control_forward
-                    else keys["force_auto_peak_bwd"]
-                )
                 if st.button(
                     "Auto Max",
                     key=(
-                        f"auto_original_{control_short}_{file_id}_"
+                        f"auto_restored_{control_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     use_container_width=True,
@@ -1404,7 +1521,6 @@ with main_content:
                     st.session_state[force_key] = True
                     st.rerun()
 
-            # Peak elimination / manual removal
             with removal_control:
                 st.markdown("**Peak Elimination**")
                 removal_key = (
@@ -1416,52 +1532,47 @@ with main_content:
                     slider_label=f"{control_direction} removal Vg",
                     state_key=removal_key,
                     active_df=control_df,
-                    default_value=float(
-                        control_df["GateV"].iloc[control_auto_idx]
-                    ),
+                    default_value=float(control_df["GateV"].iloc[control_auto_idx]),
                     button_prefix=(
-                        f"remove_original_{control_short}_{file_id}_"
+                        f"remove_restored_{control_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     parent=removal_control,
                 )
-                removal_idx, removal_row = nearest_row_by_vg(
-                    control_df, removal_vg
-                )
+                _, removal_row = nearest_row_by_vg(control_df, removal_vg)
                 removed_key = (
                     keys["removed_fwd"] if control_forward
                     else keys["removed_bwd"]
                 )
                 remove_col, reset_col = st.columns(2)
-                if remove_col.button(
+                remove_col.button(
                     "Remove",
                     key=(
-                        f"remove_btn_original_{control_short}_{file_id}_"
+                        f"remove_btn_restored_{control_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     use_container_width=True,
-                ):
-                    source_idx = int(removal_row["__source_index"])
-                    removed = list(st.session_state[removed_key])
-                    if source_idx not in removed:
-                        removed.append(source_idx)
-                        st.session_state[removed_key] = removed
-                    st.session_state[force_key] = True
-                    st.rerun()
-
-                if reset_col.button(
+                    on_click=remove_mobility_point,
+                    args=(
+                        removed_key,
+                        int(removal_row["__source_index"]),
+                        force_key,
+                    ),
+                )
+                reset_col.button(
                     "Reset",
                     key=(
-                        f"reset_btn_original_{control_short}_{file_id}_"
+                        f"reset_btn_restored_{control_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     use_container_width=True,
-                ):
-                    st.session_state[removed_key] = []
-                    st.session_state[force_key] = True
-                    st.rerun()
+                    on_click=reset_mobility_points,
+                    args=(removed_key, force_key),
+                )
+                st.caption(
+                    f"Removed: {len(st.session_state.get(removed_key, []))}"
+                )
 
-            # Current-density point
             with current_control:
                 st.markdown("**Transfer Current Point**")
                 current_key = (
@@ -1475,26 +1586,16 @@ with main_content:
                     active_df=control_df,
                     default_value=float(control_df["GateV"].iloc[0]),
                     button_prefix=(
-                        f"current_original_{control_short}_{file_id}_"
+                        f"current_restored_{control_short}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     parent=current_control,
                 )
-                if control_forward:
-                    current_f_idx, current_f_row, current_f_density = (
-                        current_density_at_vg(fwd, current_vg, W)
-                    )
-                    active_density = current_f_density
-                else:
-                    current_b_idx, current_b_row, current_b_density = (
-                        current_density_at_vg(bwd, current_vg, W)
-                    )
-                    active_density = current_b_density
-                st.caption(
-                    f"|Id|/W = {sci_plain(active_density)} A/μm"
+                _, _, active_density = current_density_at_vg(
+                    control_df, current_vg, W
                 )
+                st.caption(f"|Id|/W = {sci_plain(active_density)} A/μm")
 
-            # Refresh current values for plotting after control interactions
             current_f_vg = float(st.session_state[keys["current_slider_fwd"]])
             current_b_vg = float(st.session_state[keys["current_slider_bwd"]])
             current_f_idx, current_f_row, current_f_density = current_density_at_vg(
@@ -1502,18 +1603,6 @@ with main_content:
             )
             current_b_idx, current_b_row, current_b_density = current_density_at_vg(
                 bwd, current_b_vg, W
-            )
-
-            peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
-            peak_b_vg = float(st.session_state[keys["peak_slider_bwd"]])
-            idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
-            idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
-            params = parameter_values(
-                fwd["GateV"], fwd["DrainI_active"],
-                res["gm_fwd"], res["mu_fwd"], idx_f,
-                bwd["GateV"], bwd["DrainI_active"],
-                res["gm_bwd"], res["mu_bwd"], idx_b,
-                operating_mode, W,
             )
 
             # Three plots in one horizontal row
@@ -1634,24 +1723,18 @@ with main_content:
                 row=1, col=3,
             )
 
-            fig.add_trace(
-                go.Scatter(
-                    x=[float(fwd["GateV"].iloc[idx_f])],
-                    y=[float(res["mu_fwd"][idx_f])],
-                    mode="markers",
-                    marker=dict(symbol="x", size=11, color="black"),
-                    showlegend=False,
-                ),
+            fig.add_vline(
+                x=float(fwd["GateV"].iloc[idx_f]),
+                line_dash="dot",
+                line_width=1.5,
+                line_color=color_fwd,
                 row=1, col=3,
             )
-            fig.add_trace(
-                go.Scatter(
-                    x=[float(bwd["GateV"].iloc[idx_b])],
-                    y=[float(res["mu_bwd"][idx_b])],
-                    mode="markers",
-                    marker=dict(symbol="x", size=11, color="black"),
-                    showlegend=False,
-                ),
+            fig.add_vline(
+                x=float(bwd["GateV"].iloc[idx_b]),
+                line_dash="dot",
+                line_width=1.5,
+                line_color=color_bwd,
                 row=1, col=3,
             )
 
