@@ -535,11 +535,18 @@ def fix_inf(values):
 
 def make_card(title, value, color):
     return f"""
-    <div style='text-align:left; padding:3px 0; min-width:0;'>
-        <p style='font-size:15px; margin-bottom:3px; color:#555;
-                  line-height:1.15; white-space:nowrap;'>{title}</p>
-        <p style='font-size:20px; font-weight:bold; color:{color};
-                  margin:0; line-height:1.15; white-space:nowrap;'>{value}</p>
+    <div style='text-align:left; padding:5px 2px 7px 2px; min-width:0;'>
+        <div style='font-size:13px; color:#555; line-height:1.25;
+                    min-height:34px; margin-bottom:5px;
+                    overflow-wrap:anywhere; word-break:keep-all;'>
+            {title}
+        </div>
+        <div style='font-size:18px; font-weight:700; color:{color};
+                    line-height:1.2; min-height:23px;
+                    white-space:nowrap; overflow:hidden;
+                    text-overflow:ellipsis;'>
+            {value}
+        </div>
     </div>
     """
 
@@ -1309,32 +1316,36 @@ with main_content:
                 )
 
                 parameter_panel.markdown("<h4 style='color:#6FADCF;'>Forward Sweep Parameters</h4>", unsafe_allow_html=True)
-                f1, f2, f3, f4 = parameter_panel.columns(4)
-                f1.markdown(make_card("Peak Mobility", f"{params['mu_fwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-                f2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_fwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-                f3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_fwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
-                f4.markdown(make_card("SS", f"{params['ss_fwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+                f1, f2 = parameter_panel.columns(2)
+                f1.markdown(make_card("Peak Mobility (cm²/V·s)", f"{params['mu_fwd']:.2f}", "#2E60AB"), unsafe_allow_html=True)
+                f2.markdown(make_card("Threshold Voltage, Vₜₕ (V)", f"{params['vth_fwd']:.2f}", "#A23B72"), unsafe_allow_html=True)
+                f3, f4 = parameter_panel.columns(2)
+                f3.markdown(make_card("Peak Point, Vg (V)", f"{params['peak_vg_fwd']:.1f}", "#F18F01"), unsafe_allow_html=True)
+                f4.markdown(make_card("SS (mV/dec)", f"{params['ss_fwd']:.1f}", "#18A558"), unsafe_allow_html=True)
 
                 parameter_panel.markdown("<h4 style='color:#F05650;'>Backward Sweep Parameters</h4>", unsafe_allow_html=True)
-                b1, b2, b3, b4 = parameter_panel.columns(4)
-                b1.markdown(make_card("Peak Mobility", f"{params['mu_bwd']:.2f} cm²/V·s", "#2E60AB"), unsafe_allow_html=True)
-                b2.markdown(make_card("Threshold Voltage (Vₜₕ)", f"{params['vth_bwd']:.2f} V", "#A23B72"), unsafe_allow_html=True)
-                b3.markdown(make_card("Peak Point (Vg)", f"{params['peak_vg_bwd']:.1f} V", "#F18F01"), unsafe_allow_html=True)
-                b4.markdown(make_card("SS", f"{params['ss_bwd']:.1f} mV/dec", "#18A558"), unsafe_allow_html=True)
+                b1, b2 = parameter_panel.columns(2)
+                b1.markdown(make_card("Peak Mobility (cm²/V·s)", f"{params['mu_bwd']:.2f}", "#2E60AB"), unsafe_allow_html=True)
+                b2.markdown(make_card("Threshold Voltage, Vₜₕ (V)", f"{params['vth_bwd']:.2f}", "#A23B72"), unsafe_allow_html=True)
+                b3, b4 = parameter_panel.columns(2)
+                b3.markdown(make_card("Peak Point, Vg (V)", f"{params['peak_vg_bwd']:.1f}", "#F18F01"), unsafe_allow_html=True)
+                b4.markdown(make_card("SS (mV/dec)", f"{params['ss_bwd']:.1f}", "#18A558"), unsafe_allow_html=True)
 
                 parameter_panel.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
-                o1, o2, o3, o4 = parameter_panel.columns(4)
-                o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-                o2.markdown(make_card("ON Current / Width", f"{sci(params['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-                o3.markdown(make_card("OFF Current / Width", f"{sci(params['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
-                o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
+                o1, o2 = parameter_panel.columns(2)
+                o1.markdown(make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
+                o2.markdown(make_card("ON Current / Width (A/μm)", sci(params['on_density']), "#5B5F97"), unsafe_allow_html=True)
+                o3, o4 = parameter_panel.columns(2)
+                o3.markdown(make_card("OFF Current / Width (A/μm)", sci(params['off_density']), "#5B5F97"), unsafe_allow_html=True)
+                o4.markdown(make_card("Hysteresis (V)", f"{params['hysteresis']:.2f}", "#5B5F97"), unsafe_allow_html=True)
 
                 parameter_panel.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
-                c1, c2, c3, c4 = parameter_panel.columns(4)
-                c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
-                c2.markdown(make_card("Forward |Id| / W", f"{sci(current_f_density)} A/μm", "#2E60AB"), unsafe_allow_html=True)
-                c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
-                c4.markdown(make_card("Backward |Id| / W", f"{sci(current_b_density)} A/μm", "#F05650"), unsafe_allow_html=True)
+                c1, c2 = parameter_panel.columns(2)
+                c1.markdown(make_card("Forward Vg (V)", f"{float(current_f_row['GateV']):.2f}", "#2E60AB"), unsafe_allow_html=True)
+                c2.markdown(make_card("Forward |Id| / W (A/μm)", sci(current_f_density), "#2E60AB"), unsafe_allow_html=True)
+                c3, c4 = parameter_panel.columns(2)
+                c3.markdown(make_card("Backward Vg (V)", f"{float(current_b_row['GateV']):.2f}", "#F05650"), unsafe_allow_html=True)
+                c4.markdown(make_card("Backward |Id| / W (A/μm)", sci(current_b_density), "#F05650"), unsafe_allow_html=True)
 
                 # ====================================================
                 # Save current result to selected folder
