@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
-st.title("FET-Analysis_Minjae")
+st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
+st.title("FET-Analysis_Minjae X Junseong")
 
 st.markdown("""
 <style>
@@ -110,6 +110,36 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
     font-size:12px;
     font-weight:800;
     margin-bottom:2px;
+}
+
+/* v42 final layout */
+.top-param-card {
+    min-height: 72px !important;
+    padding: 6px 4px !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    border: none !important;
+}
+.top-param-title {
+    font-size: 16px !important;
+    font-weight: 850 !important;
+    color: #444 !important;
+    margin-bottom: 4px !important;
+}
+.top-param-value {
+    font-size: 23px !important;
+    font-weight: 900 !important;
+    line-height: 1.22 !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+.slider-heading {
+    font-size: 15px;
+    font-weight: 900;
+    margin: 0 0 4px 0;
+}
+.compact-slider-area div[data-testid="stButton"] button {
+    min-height: 28px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1042,8 +1072,15 @@ def standardize_measurement_columns(df):
     return df.rename(columns=rename_map)
 
 
-def extract_drain_v_from_calc(xls):
-    """Find a Drain V value in the Calc sheet."""
+def extract_drain_v_from_calc(xls, selected_sheet=None):
+    """Read Drain V from Calc.
+
+    Priority:
+    1) Find the selected sheet's condition area.
+    2) Inside that area, find a row where Name == DrainV.
+    3) Return the numeric value under Start/Level.
+    4) Fall back to a global DrainV search.
+    """
     calc_sheet = next(
         (name for name in xls.sheet_names if name.strip().lower() == "calc"),
         None,
@@ -1051,45 +1088,88 @@ def extract_drain_v_from_calc(xls):
     if calc_sheet is None:
         return None
 
-    labels = {"drainv", "drainvoltage", "vd", "vds"}
-
-    try:
-        calc_df = xls.parse(calc_sheet)
-        for column in calc_df.columns:
-            if normalize_excel_label(column) in labels:
-                numeric = pd.to_numeric(calc_df[column], errors="coerce").dropna()
-                if not numeric.empty:
-                    return float(numeric.iloc[0])
-    except Exception:
-        pass
-
     try:
         raw = xls.parse(calc_sheet, header=None)
     except Exception:
         return None
 
     rows, cols = raw.shape
-    for row in range(rows):
-        for col in range(cols):
-            if normalize_excel_label(raw.iat[row, col]) not in labels:
+    selected_norm = normalize_excel_label(selected_sheet or "")
+
+    # Locate possible selected-sheet anchors in Calc.
+    anchors = []
+    if selected_norm:
+        for r in range(rows):
+            for c in range(cols):
+                if normalize_excel_label(raw.iat[r, c]) == selected_norm:
+                    anchors.append((r, c))
+
+    # Search windows around sheet anchors first.
+    search_windows = []
+    for anchor_r, anchor_c in anchors:
+        r0 = max(0, anchor_r - 3)
+        r1 = min(rows, anchor_r + 60)
+        c0 = max(0, anchor_c - 3)
+        c1 = min(cols, anchor_c + 14)
+        search_windows.append((r0, r1, c0, c1))
+
+    # Fallback: entire Calc sheet.
+    search_windows.append((0, rows, 0, cols))
+
+    name_tokens = {"name"}
+    drain_tokens = {"drainv", "drainvoltage", "vd", "vds"}
+    level_tokens = {
+        "startlevel", "start", "level", "startvalue", "initiallevel"
+    }
+
+    for r0, r1, c0, c1 in search_windows:
+        # Detect header rows containing Name and Start/Level.
+        for header_r in range(r0, r1):
+            header_map = {}
+            for c in range(c0, c1):
+                token = normalize_excel_label(raw.iat[header_r, c])
+                if token in name_tokens:
+                    header_map["name"] = c
+                if token in level_tokens:
+                    header_map["level"] = c
+
+            if "name" not in header_map or "level" not in header_map:
                 continue
 
-            nearby = []
-            for delta_col in (1, 2, -1, -2):
-                candidate_col = col + delta_col
-                if 0 <= candidate_col < cols:
-                    nearby.append(raw.iat[row, candidate_col])
-            for delta_row in (1, 2, -1, -2):
-                candidate_row = row + delta_row
-                if 0 <= candidate_row < rows:
-                    nearby.append(raw.iat[candidate_row, col])
+            name_col = header_map["name"]
+            level_col = header_map["level"]
 
-            for value in nearby:
-                numeric = pd.to_numeric(
-                    pd.Series([value]), errors="coerce"
-                ).iloc[0]
-                if pd.notna(numeric):
-                    return float(numeric)
+            # Search downward until a blank region or next block.
+            for r in range(header_r + 1, min(r1, header_r + 50)):
+                name_value = normalize_excel_label(raw.iat[r, name_col])
+                if name_value in drain_tokens:
+                    numeric = pd.to_numeric(
+                        pd.Series([raw.iat[r, level_col]]),
+                        errors="coerce",
+                    ).iloc[0]
+                    if pd.notna(numeric):
+                        return float(numeric)
+
+        # Also support vertically arranged labels near the anchor.
+        for r in range(r0, r1):
+            for c in range(c0, c1):
+                if normalize_excel_label(raw.iat[r, c]) not in drain_tokens:
+                    continue
+                nearby = []
+                for dc in (1, 2, 3, -1, -2):
+                    cc = c + dc
+                    if c0 <= cc < c1:
+                        nearby.append(raw.iat[r, cc])
+                for dr in (1, 2, -1, -2):
+                    rr = r + dr
+                    if r0 <= rr < r1:
+                        nearby.append(raw.iat[rr, c])
+                for value in nearby:
+                    numeric = pd.to_numeric(
+                        pd.Series([value]), errors="coerce"
+                    ).iloc[0]
+                    if pd.notna(numeric):
+                        return float(numeric)
 
     return None
 
@@ -1452,7 +1532,7 @@ with main_content:
                 st.stop()
 
             if "DrainV" not in df.columns:
-                calc_drain_v = extract_drain_v_from_calc(xls)
+                calc_drain_v = extract_drain_v_from_calc(xls, selected_sheet)
                 if calc_drain_v is None:
                     st.error(
                         "선택한 시트에 DrainV가 없고 Calc 시트에서도 "
@@ -1900,6 +1980,7 @@ with main_content:
 
 
             # ====================================================
+            # ====================================================
             # Direction-aware parameter summary above plots
             # ====================================================
             direction_color = (
@@ -1915,7 +1996,7 @@ with main_content:
                     unsafe_allow_html=True,
                 )
 
-            top_row_1 = st.columns(3, gap="small")
+            top_row_1 = st.columns(4, gap="medium")
             with top_row_1[0]:
                 render_top_parameter(
                     "ON Current / Width",
@@ -1931,14 +2012,14 @@ with main_content:
                     "ON/OFF Ratio",
                     sci(active_state["onoff"]),
                 )
-
-            top_row_2 = st.columns(4, gap="small")
-            with top_row_2[0]:
+            with top_row_1[3]:
                 render_top_parameter(
                     "Mobility",
                     f"{active_state['mobility']:.2f} cm²/V·s",
                 )
-            with top_row_2[1]:
+
+            top_row_2 = st.columns(3, gap="large")
+            with top_row_2[0]:
                 render_top_parameter(
                     "Vₜₕ",
                     (
@@ -1946,7 +2027,7 @@ with main_content:
                         if np.isfinite(active_state["vth"]) else "N/A"
                     ),
                 )
-            with top_row_2[2]:
+            with top_row_2[1]:
                 render_top_parameter(
                     "Hysteresis",
                     (
@@ -1954,9 +2035,9 @@ with main_content:
                         if np.isfinite(selected_hysteresis) else "N/A"
                     ),
                 )
-            with top_row_2[3]:
+            with top_row_2[2]:
                 render_top_parameter(
-                    "SS",
+                    "SS Value",
                     (
                         f"{active_state['ss']:.1f} mV/dec"
                         if np.isfinite(active_state["ss"]) else "N/A"
@@ -1987,22 +2068,21 @@ with main_content:
             vg_bwd = bwd["GateV"]
             id_bwd = bwd["DrainI_active"]
 
-            selected_vg = (
-                vg_fwd if selected_direction == "Forward" else vg_bwd
-            )
-            selected_id = (
-                id_fwd if selected_direction == "Forward" else id_bwd
-            )
-            selected_color = (
-                "blue" if selected_direction == "Forward" else "red"
-            )
-
             for col_num in (1, 3):
                 fig.add_trace(
                     go.Scatter(
-                        x=selected_vg,
-                        y=np.abs(selected_id),
-                        line=dict(color=selected_color),
+                        x=vg_fwd,
+                        y=np.abs(id_fwd),
+                        line=dict(color="blue"),
+                        showlegend=False,
+                    ),
+                    row=1, col=col_num,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=vg_bwd,
+                        y=np.abs(id_bwd),
+                        line=dict(color="red"),
                         showlegend=False,
                     ),
                     row=1, col=col_num,
@@ -2016,33 +2096,46 @@ with main_content:
                 ig_b = gate_i.iloc[
                     bwd["__source_index"].astype(int).to_numpy()
                 ].reset_index(drop=True)
-                selected_ig = (
-                    ig_f if selected_direction == "Forward" else ig_b
-                )
                 for col_num in (1, 3):
                     fig.add_trace(
                         go.Scatter(
-                            x=selected_vg,
-                            y=np.abs(selected_ig),
+                            x=vg_fwd,
+                            y=np.abs(ig_f),
                             line=dict(color="dimgray", dash="dot"),
                             showlegend=False,
                         ),
                         row=1, col=col_num,
                     )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=vg_bwd,
+                            y=np.abs(ig_b),
+                            line=dict(color="black", dash="dot"),
+                            showlegend=False,
+                        ),
+                        row=1, col=col_num,
+                    )
 
-            # ON/OFF markers for the selected direction.
-            for symbol, color, row_key in (
-                ("circle", "green", "on_row"),
-                ("square", "orange", "off_row"),
-            ):
-                row_data = active_state[row_key]
+            # ON/OFF markers for both directions.
+            marker_specs = (
+                (f_state, "circle-open", "green", "on_row"),
+                (f_state, "square-open", "orange", "off_row"),
+                (r_state, "circle", "green", "on_row"),
+                (r_state, "square", "orange", "off_row"),
+            )
+            for marker_state, symbol, marker_color, row_key in marker_specs:
+                row_data = marker_state[row_key]
                 for col_num in (1, 3):
                     fig.add_trace(
                         go.Scatter(
                             x=[float(row_data["GateV"])],
                             y=[abs(float(row_data["DrainI_active"]))],
                             mode="markers",
-                            marker=dict(symbol=symbol, size=10, color=color),
+                            marker=dict(
+                                symbol=symbol,
+                                size=10,
+                                color=marker_color,
+                            ),
                             showlegend=False,
                         ),
                         row=1, col=col_num,
@@ -2051,117 +2144,138 @@ with main_content:
             # Mobility curves and independently selected peak lines.
             fig.add_trace(
                 go.Scatter(
-                    x=active_state["df"]["GateV"],
-                    y=active_state["mu_curve"],
-                    line=dict(color=active_state["color"]),
+                    x=vg_fwd,
+                    y=res["mu_fwd"],
+                    line=dict(color="blue"),
                     showlegend=False,
                 ),
                 row=1, col=2,
             )
-            fig.add_vline(
-                x=active_state["peak_vg"],
-                line_dash="dot",
-                line_width=1.5,
-                line_color=active_state["color"],
-                row=1, col=2,
-            )
-
-            # Peak-elimination target for the selected direction.
-            selected_elimination_row = (
-                selected_f_row
-                if selected_direction == "Forward"
-                else selected_b_row
-            )
-            selected_elimination_mu = (
-                selected_f_mu
-                if selected_direction == "Forward"
-                else selected_b_mu
-            )
             fig.add_trace(
                 go.Scatter(
-                    x=[float(selected_elimination_row["GateV"])],
-                    y=[float(selected_elimination_mu)],
-                    mode="markers",
-                    marker=dict(
-                        symbol="x",
-                        size=12,
-                        color=active_state["color"],
-                        line=dict(width=2, color=active_state["color"]),
+                    x=vg_bwd,
+                    y=res["mu_bwd"],
+                    line=dict(color="red"),
+                    showlegend=False,
+                ),
+                row=1, col=2,
+            )
+            for marker_state in (f_state, r_state):
+                fig.add_vline(
+                    x=marker_state["peak_vg"],
+                    line_dash="dot",
+                    line_width=1.5,
+                    line_color=marker_state["color"],
+                    row=1, col=2,
+                )
+
+            # Peak-elimination targets for both directions.
+            for elimination_row, elimination_mu, elimination_color in (
+                (selected_f_row, selected_f_mu, "blue"),
+                (selected_b_row, selected_b_mu, "red"),
+            ):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(elimination_row["GateV"])],
+                        y=[float(elimination_mu)],
+                        mode="markers",
+                        marker=dict(
+                            symbol="x",
+                            size=12,
+                            color=elimination_color,
+                            line=dict(width=2, color=elimination_color),
+                        ),
+                        showlegend=False,
                     ),
-                    showlegend=False,
-                ),
-                row=1, col=2,
-            )
+                    row=1, col=2,
+                )
 
-            # SS curve for selected direction.
+            # SS curves for both directions.
             fig.add_trace(
                 go.Scatter(
-                    x=active_state["df"]["GateV"],
-                    y=active_state["ss_curve"],
-                    line=dict(color=active_state["color"]),
+                    x=f_state["df"]["GateV"],
+                    y=f_state["ss_curve"],
+                    line=dict(color="blue"),
                     showlegend=False,
                 ),
                 row=1, col=4,
             )
-            if np.isfinite(active_state["ss"]):
-                fig.add_hline(
-                    y=active_state["ss"],
-                    line_dash="dot",
-                    line_width=1.5,
-                    line_color=active_state["color"],
-                    row=1, col=4,
-                )
+            fig.add_trace(
+                go.Scatter(
+                    x=r_state["df"]["GateV"],
+                    y=r_state["ss_curve"],
+                    line=dict(color="red"),
+                    showlegend=False,
+                ),
+                row=1, col=4,
+            )
+            for ss_state in (f_state, r_state):
+                if np.isfinite(ss_state["ss"]):
+                    fig.add_hline(
+                        y=ss_state["ss"],
+                        line_dash="dot",
+                        line_width=1.5,
+                        line_color=ss_state["color"],
+                        row=1, col=4,
+                    )
 
-            # Tangent for selected direction.
-            state = active_state
-            x_all = np.asarray(state["df"]["GateV"], dtype=float)
-            y_all = np.abs(
-                np.asarray(state["df"]["DrainI_active"], dtype=float)
-            )
-            tangent_idx = state["vth_idx"]
-            slope_abs = np.gradient(y_all, x_all)[tangent_idx]
-            tangent_y = (
-                y_all[tangent_idx]
-                + slope_abs * (x_all - x_all[tangent_idx])
-            )
-            valid_tangent = np.isfinite(tangent_y) & (tangent_y >= 0)
-            if valid_tangent.sum() >= 2:
+            # Tangents for both directions.
+            for tangent_state in (f_state, r_state):
+                x_all = np.asarray(
+                    tangent_state["df"]["GateV"], dtype=float
+                )
+                y_all = np.abs(
+                    np.asarray(
+                        tangent_state["df"]["DrainI_active"],
+                        dtype=float,
+                    )
+                )
+                tangent_idx = tangent_state["vth_idx"]
+                slope_abs = np.gradient(y_all, x_all)[tangent_idx]
+                tangent_y = (
+                    y_all[tangent_idx]
+                    + slope_abs * (x_all - x_all[tangent_idx])
+                )
+                valid_tangent = (
+                    np.isfinite(tangent_y) & (tangent_y >= 0)
+                )
+                if valid_tangent.sum() >= 2:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_all[valid_tangent],
+                            y=tangent_y[valid_tangent],
+                            line=dict(
+                                color=tangent_state["color"],
+                                dash="dot",
+                                width=1.6,
+                            ),
+                            showlegend=False,
+                        ),
+                        row=1, col=3,
+                    )
                 fig.add_trace(
                     go.Scatter(
-                        x=x_all[valid_tangent],
-                        y=tangent_y[valid_tangent],
-                        line=dict(
-                            color=state["color"],
-                            dash="dot",
-                            width=1.6,
+                        x=[tangent_state["vth_vg"]],
+                        y=[
+                            abs(
+                                float(
+                                    tangent_state["df"][
+                                        "DrainI_active"
+                                    ].iloc[tangent_idx]
+                                )
+                            )
+                        ],
+                        mode="markers",
+                        marker=dict(
+                            size=9,
+                            color=tangent_state["color"],
+                            symbol="circle",
+                            line=dict(width=1, color="white"),
                         ),
                         showlegend=False,
                     ),
                     row=1, col=3,
                 )
-            fig.add_trace(
-                go.Scatter(
-                    x=[state["vth_vg"]],
-                    y=[
-                        abs(
-                            float(
-                                state["df"]["DrainI_active"].iloc[
-                                    tangent_idx
-                                ]
-                            )
-                        )
-                    ],
-                    mode="markers",
-                    marker=dict(
-                        size=9,
-                        color=state["color"],
-                        symbol="circle",
-                        line=dict(width=1, color="white"),
-                    ),
-                    showlegend=False,
-                ),
-                row=1, col=3,
-            )
 
             common_axis = dict(
                 ticks="outside", showline=True, mirror=True, showgrid=True,
@@ -2259,63 +2373,108 @@ with main_content:
             # ====================================================
             # ====================================================
             # ====================================================
+            # ====================================================
             # Selected-direction controls directly below plots
             # ====================================================
             st.markdown(
                 "<div class='compact-slider-area'></div>",
                 unsafe_allow_html=True,
             )
-            control_columns = st.columns(4, gap="small")
+            control_columns = st.columns(4, gap="medium")
 
-            # Transfer Log: ON and OFF selection
+            # Transfer Log controls: ON and OFF on the same row.
             with control_columns[0]:
                 st.markdown(
-                    f"<div class='direction-caption' "
-                    f"style='color:{direction_color};'>"
-                    f"{selected_direction}</div>",
+                    f"<div class='slider-heading' style='color:{direction_color};'>"
+                    f"{selected_direction} · ON / OFF</div>",
                     unsafe_allow_html=True,
                 )
-                render_discrete_vg_control(
-                    title="",
-                    slider_label="",
-                    state_key=active_state["on_key"],
-                    active_df=active_state["df"],
-                    default_value=float(
-                        active_state["df"]["GateV"].iloc[
-                            active_state["on_auto_idx"]
-                        ]
-                    ),
-                    button_prefix=(
-                        f"active_on_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    parent=control_columns[0],
+                on_control_col, off_control_col = control_columns[0].columns(
+                    2, gap="medium"
                 )
-                control_columns[0].caption("ON")
-                render_discrete_vg_control(
-                    title="",
-                    slider_label="",
-                    state_key=active_state["off_key"],
-                    active_df=active_state["df"],
-                    default_value=float(
-                        active_state["df"]["GateV"].iloc[
-                            active_state["off_auto_idx"]
-                        ]
-                    ),
-                    button_prefix=(
-                        f"active_off_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    parent=control_columns[0],
-                )
-                control_columns[0].caption("OFF")
+                with on_control_col:
+                    st.markdown(
+                        "<div class='slider-heading'>ON</div>",
+                        unsafe_allow_html=True,
+                    )
+                    render_discrete_vg_control(
+                        title="",
+                        slider_label="",
+                        state_key=active_state["on_key"],
+                        active_df=active_state["df"],
+                        default_value=float(
+                            active_state["df"]["GateV"].iloc[
+                                active_state["on_auto_idx"]
+                            ]
+                        ),
+                        button_prefix=(
+                            f"active_on_{selected_direction}_{file_id}_"
+                            f"{selected_sheet}_{operating_mode}"
+                        ),
+                        parent=on_control_col,
+                    )
+                    on_control_col.button(
+                        "Auto Set",
+                        key=(
+                            f"active_on_auto_{selected_direction}_{file_id}_"
+                            f"{selected_sheet}_{operating_mode}"
+                        ),
+                        use_container_width=True,
+                        on_click=set_state_value,
+                        args=(
+                            active_state["on_key"],
+                            float(
+                                active_state["df"]["GateV"].iloc[
+                                    active_state["on_auto_idx"]
+                                ]
+                            ),
+                        ),
+                    )
 
-            # Mobility: selected peak and elimination
+                with off_control_col:
+                    st.markdown(
+                        "<div class='slider-heading'>OFF</div>",
+                        unsafe_allow_html=True,
+                    )
+                    render_discrete_vg_control(
+                        title="",
+                        slider_label="",
+                        state_key=active_state["off_key"],
+                        active_df=active_state["df"],
+                        default_value=float(
+                            active_state["df"]["GateV"].iloc[
+                                active_state["off_auto_idx"]
+                            ]
+                        ),
+                        button_prefix=(
+                            f"active_off_{selected_direction}_{file_id}_"
+                            f"{selected_sheet}_{operating_mode}"
+                        ),
+                        parent=off_control_col,
+                    )
+                    off_control_col.button(
+                        "Auto Set",
+                        key=(
+                            f"active_off_auto_{selected_direction}_{file_id}_"
+                            f"{selected_sheet}_{operating_mode}"
+                        ),
+                        use_container_width=True,
+                        on_click=set_state_value,
+                        args=(
+                            active_state["off_key"],
+                            float(
+                                active_state["df"]["GateV"].iloc[
+                                    active_state["off_auto_idx"]
+                                ]
+                            ),
+                        ),
+                    )
+
+            # Mobility controls.
             with control_columns[1]:
                 st.markdown(
-                    f"<div class='direction-caption' "
-                    f"style='color:{direction_color};'>"
-                    f"{selected_direction}</div>",
+                    f"<div class='slider-heading' style='color:{direction_color};'>"
+                    f"{selected_direction} · Mobility</div>",
                     unsafe_allow_html=True,
                 )
                 render_discrete_vg_control(
@@ -2330,7 +2489,25 @@ with main_content:
                     ),
                     parent=control_columns[1],
                 )
-                control_columns[1].caption("Mobility")
+                control_columns[1].button(
+                    "Auto Set",
+                    key=(
+                        f"active_mobility_auto_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    use_container_width=True,
+                    on_click=set_state_value,
+                    args=(
+                        active_state["peak_key"],
+                        float(active_state["peak_default"]),
+                    ),
+                )
+
+                st.markdown(
+                    "<div class='slider-heading' style='margin-top:8px;'>"
+                    "Peak Elimination</div>",
+                    unsafe_allow_html=True,
+                )
 
                 active_removed_key = (
                     keys["removed_fwd"]
@@ -2347,6 +2524,7 @@ with main_content:
                     if selected_direction == "Forward"
                     else keys["force_auto_peak_bwd"]
                 )
+
                 default_remove_vg = float(
                     active_state["df"]["GateV"].iloc[
                         active_state["auto_idx"]
@@ -2364,7 +2542,6 @@ with main_content:
                     ),
                     parent=control_columns[1],
                 )
-                control_columns[1].caption("Elimination")
                 _, removal_row = nearest_row_by_vg(
                     active_state["df"], removal_vg
                 )
@@ -2372,12 +2549,13 @@ with main_content:
                     2, gap="small"
                 )
                 remove_col.button(
-                    "Rm",
+                    "✕",
                     key=(
                         f"active_rm_{selected_direction}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     use_container_width=True,
+                    help="Remove selected point",
                     on_click=remove_mobility_point,
                     args=(
                         active_removed_key,
@@ -2392,12 +2570,13 @@ with main_content:
                     ),
                 )
                 reset_col.button(
-                    "Rst",
+                    "↶",
                     key=(
                         f"active_rst_{selected_direction}_{file_id}_"
                         f"{selected_sheet}_{operating_mode}"
                     ),
                     use_container_width=True,
+                    help="Undo all removed points",
                     on_click=reset_mobility_points,
                     args=(
                         active_removed_key,
@@ -2410,11 +2589,5 @@ with main_content:
                         ),
                     ),
                 )
-
-            # Linear transfer and SS have no independent sliders.
-            with control_columns[2]:
-                st.caption("Vₜₕ follows the selected Mobility point.")
-            with control_columns[3]:
-                st.caption("SS is automatically calculated.")
 
 
