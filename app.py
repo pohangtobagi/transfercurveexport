@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -140,6 +140,27 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
 }
 .compact-slider-area div[data-testid="stButton"] button {
     min-height: 28px !important;
+}
+
+/* v43 layout refinements */
+.top-param-title {
+    font-size: 19px !important;
+    font-weight: 900 !important;
+    margin-bottom: 6px !important;
+}
+.top-param-value {
+    font-size: 27px !important;
+    font-weight: 900 !important;
+}
+.param-row-gap {
+    height: 18px;
+}
+.slider-row-gap {
+    height: 18px;
+}
+.slider-heading {
+    font-size: 17px !important;
+    margin-bottom: 7px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1073,13 +1094,15 @@ def standardize_measurement_columns(df):
 
 
 def extract_drain_v_from_calc(xls, selected_sheet=None):
-    """Read Drain V from Calc.
+    """Read Drain V from the selected sheet's condition region in Calc.
 
-    Priority:
-    1) Find the selected sheet's condition area.
-    2) Inside that area, find a row where Name == DrainV.
-    3) Return the numeric value under Start/Level.
-    4) Fall back to a global DrainV search.
+    Procedure:
+    1) Find the selected sheet's block in Calc.
+    2) In column A of that block, find the row labeled 'Name'.
+    3) In that same row, find the column labeled 'DrainV'.
+    4) In column A, find the row labeled 'Start/Level'.
+    5) Return the cell at the intersection of the DrainV column and
+       Start/Level row.
     """
     calc_sheet = next(
         (name for name in xls.sheet_names if name.strip().lower() == "calc"),
@@ -1096,7 +1119,7 @@ def extract_drain_v_from_calc(xls, selected_sheet=None):
     rows, cols = raw.shape
     selected_norm = normalize_excel_label(selected_sheet or "")
 
-    # Locate possible selected-sheet anchors in Calc.
+    # Find selected sheet anchors anywhere in Calc.
     anchors = []
     if selected_norm:
         for r in range(rows):
@@ -1104,72 +1127,47 @@ def extract_drain_v_from_calc(xls, selected_sheet=None):
                 if normalize_excel_label(raw.iat[r, c]) == selected_norm:
                     anchors.append((r, c))
 
-    # Search windows around sheet anchors first.
-    search_windows = []
+    # If the sheet name is not explicitly written, use the whole sheet.
+    if not anchors:
+        anchors = [(0, 0)]
+
     for anchor_r, anchor_c in anchors:
+        # Build a reasonable condition-region window around the anchor.
         r0 = max(0, anchor_r - 3)
-        r1 = min(rows, anchor_r + 60)
-        c0 = max(0, anchor_c - 3)
-        c1 = min(cols, anchor_c + 14)
-        search_windows.append((r0, r1, c0, c1))
+        r1 = min(rows, anchor_r + 80)
+        c0 = 0
+        c1 = cols
 
-    # Fallback: entire Calc sheet.
-    search_windows.append((0, rows, 0, cols))
+        name_row = None
+        start_level_row = None
 
-    name_tokens = {"name"}
-    drain_tokens = {"drainv", "drainvoltage", "vd", "vds"}
-    level_tokens = {
-        "startlevel", "start", "level", "startvalue", "initiallevel"
-    }
-
-    for r0, r1, c0, c1 in search_windows:
-        # Detect header rows containing Name and Start/Level.
-        for header_r in range(r0, r1):
-            header_map = {}
-            for c in range(c0, c1):
-                token = normalize_excel_label(raw.iat[header_r, c])
-                if token in name_tokens:
-                    header_map["name"] = c
-                if token in level_tokens:
-                    header_map["level"] = c
-
-            if "name" not in header_map or "level" not in header_map:
-                continue
-
-            name_col = header_map["name"]
-            level_col = header_map["level"]
-
-            # Search downward until a blank region or next block.
-            for r in range(header_r + 1, min(r1, header_r + 50)):
-                name_value = normalize_excel_label(raw.iat[r, name_col])
-                if name_value in drain_tokens:
-                    numeric = pd.to_numeric(
-                        pd.Series([raw.iat[r, level_col]]),
-                        errors="coerce",
-                    ).iloc[0]
-                    if pd.notna(numeric):
-                        return float(numeric)
-
-        # Also support vertically arranged labels near the anchor.
+        # User specified that labels are in column A.
         for r in range(r0, r1):
-            for c in range(c0, c1):
-                if normalize_excel_label(raw.iat[r, c]) not in drain_tokens:
-                    continue
-                nearby = []
-                for dc in (1, 2, 3, -1, -2):
-                    cc = c + dc
-                    if c0 <= cc < c1:
-                        nearby.append(raw.iat[r, cc])
-                for dr in (1, 2, -1, -2):
-                    rr = r + dr
-                    if r0 <= rr < r1:
-                        nearby.append(raw.iat[rr, c])
-                for value in nearby:
-                    numeric = pd.to_numeric(
-                        pd.Series([value]), errors="coerce"
-                    ).iloc[0]
-                    if pd.notna(numeric):
-                        return float(numeric)
+            a_token = normalize_excel_label(raw.iat[r, 0])
+            if a_token == "name":
+                name_row = r
+            elif a_token in {"startlevel", "start", "level"}:
+                start_level_row = r
+
+        if name_row is None or start_level_row is None:
+            continue
+
+        drainv_col = None
+        for c in range(c0, c1):
+            token = normalize_excel_label(raw.iat[name_row, c])
+            if token in {"drainv", "drainvoltage", "vd", "vds"}:
+                drainv_col = c
+                break
+
+        if drainv_col is None:
+            continue
+
+        value = pd.to_numeric(
+            pd.Series([raw.iat[start_level_row, drainv_col]]),
+            errors="coerce",
+        ).iloc[0]
+        if pd.notna(value):
+            return float(value)
 
     return None
 
@@ -1981,6 +1979,7 @@ with main_content:
 
             # ====================================================
             # ====================================================
+            # ====================================================
             # Direction-aware parameter summary above plots
             # ====================================================
             direction_color = (
@@ -1996,7 +1995,7 @@ with main_content:
                     unsafe_allow_html=True,
                 )
 
-            top_row_1 = st.columns(4, gap="medium")
+            top_row_1 = st.columns(4, gap="large")
             with top_row_1[0]:
                 render_top_parameter(
                     "ON Current / Width",
@@ -2018,7 +2017,12 @@ with main_content:
                     f"{active_state['mobility']:.2f} cm²/V·s",
                 )
 
-            top_row_2 = st.columns(3, gap="large")
+            st.markdown(
+                "<div class='param-row-gap'></div>",
+                unsafe_allow_html=True,
+            )
+
+            top_row_2 = st.columns(4, gap="large")
             with top_row_2[0]:
                 render_top_parameter(
                     "Vₜₕ",
@@ -2043,6 +2047,8 @@ with main_content:
                         if np.isfinite(active_state["ss"]) else "N/A"
                     ),
                 )
+            with top_row_2[3]:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
 
             # ====================================================
             # Four horizontal plots
@@ -2068,12 +2074,19 @@ with main_content:
             vg_bwd = bwd["GateV"]
             id_bwd = bwd["DrainI_active"]
 
+            fwd_dash = (
+                "solid" if selected_direction == "Forward" else "dash"
+            )
+            rev_dash = (
+                "solid" if selected_direction == "Reverse" else "dash"
+            )
+
             for col_num in (1, 3):
                 fig.add_trace(
                     go.Scatter(
                         x=vg_fwd,
                         y=np.abs(id_fwd),
-                        line=dict(color="blue"),
+                        line=dict(color="blue", dash=fwd_dash, width=2),
                         showlegend=False,
                     ),
                     row=1, col=col_num,
@@ -2082,7 +2095,7 @@ with main_content:
                     go.Scatter(
                         x=vg_bwd,
                         y=np.abs(id_bwd),
-                        line=dict(color="red"),
+                        line=dict(color="red", dash=rev_dash, width=2),
                         showlegend=False,
                     ),
                     row=1, col=col_num,
@@ -2101,7 +2114,10 @@ with main_content:
                         go.Scatter(
                             x=vg_fwd,
                             y=np.abs(ig_f),
-                            line=dict(color="dimgray", dash="dot"),
+                            line=dict(
+                                color="dimgray",
+                                dash=("dot" if selected_direction == "Forward" else "dashdot"),
+                            ),
                             showlegend=False,
                         ),
                         row=1, col=col_num,
@@ -2110,7 +2126,10 @@ with main_content:
                         go.Scatter(
                             x=vg_bwd,
                             y=np.abs(ig_b),
-                            line=dict(color="black", dash="dot"),
+                            line=dict(
+                                color="black",
+                                dash=("dot" if selected_direction == "Reverse" else "dashdot"),
+                            ),
                             showlegend=False,
                         ),
                         row=1, col=col_num,
@@ -2146,7 +2165,7 @@ with main_content:
                 go.Scatter(
                     x=vg_fwd,
                     y=res["mu_fwd"],
-                    line=dict(color="blue"),
+                    line=dict(color="blue", dash=fwd_dash, width=2),
                     showlegend=False,
                 ),
                 row=1, col=2,
@@ -2155,7 +2174,7 @@ with main_content:
                 go.Scatter(
                     x=vg_bwd,
                     y=res["mu_bwd"],
-                    line=dict(color="red"),
+                    line=dict(color="red", dash=rev_dash, width=2),
                     showlegend=False,
                 ),
                 row=1, col=2,
@@ -2195,7 +2214,7 @@ with main_content:
                 go.Scatter(
                     x=f_state["df"]["GateV"],
                     y=f_state["ss_curve"],
-                    line=dict(color="blue"),
+                    line=dict(color="blue", dash=fwd_dash, width=2),
                     showlegend=False,
                 ),
                 row=1, col=4,
@@ -2204,7 +2223,7 @@ with main_content:
                 go.Scatter(
                     x=r_state["df"]["GateV"],
                     y=r_state["ss_curve"],
-                    line=dict(color="red"),
+                    line=dict(color="red", dash=rev_dash, width=2),
                     showlegend=False,
                 ),
                 row=1, col=4,
@@ -2246,8 +2265,16 @@ with main_content:
                             y=tangent_y[valid_tangent],
                             line=dict(
                                 color=tangent_state["color"],
-                                dash="dot",
-                                width=1.6,
+                                dash=(
+                                    "dot"
+                                    if tangent_state["name"] == selected_direction
+                                    else "dash"
+                                ),
+                                width=(
+                                    1.8
+                                    if tangent_state["name"] == selected_direction
+                                    else 1.2
+                                ),
                             ),
                             showlegend=False,
                         ),
@@ -2380,7 +2407,11 @@ with main_content:
                 "<div class='compact-slider-area'></div>",
                 unsafe_allow_html=True,
             )
-            control_columns = st.columns(4, gap="medium")
+            st.markdown(
+                "<div class='slider-row-gap'></div>",
+                unsafe_allow_html=True,
+            )
+            control_columns = st.columns(4, gap="large")
 
             # Transfer Log controls: ON and OFF on the same row.
             with control_columns[0]:
