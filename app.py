@@ -1701,8 +1701,26 @@ with main_content:
                 bwd, current_b_vg, W
             )
 
-            selected_f_vg = float(st.session_state[keys["remove_slider_fwd"]])
-            selected_b_vg = float(st.session_state[keys["remove_slider_bwd"]])
+            # Ensure both Forward and Reverse Peak Elimination selectors
+            # exist before reading them. This is required even when only one
+            # direction is currently selected in the UI.
+            initialize_slider_in_range(
+                keys["remove_slider_fwd"],
+                fwd,
+                float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+            )
+            initialize_slider_in_range(
+                keys["remove_slider_bwd"],
+                bwd,
+                float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+            )
+
+            selected_f_vg = float(
+                st.session_state[keys["remove_slider_fwd"]]
+            )
+            selected_b_vg = float(
+                st.session_state[keys["remove_slider_bwd"]]
+            )
             selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
             selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
             selected_f_mu = float(res["mu_fwd"][selected_f_idx])
