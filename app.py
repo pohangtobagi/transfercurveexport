@@ -3,6 +3,8 @@ import io
 import re
 import uuid
 from datetime import datetime
+from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.utils import get_column_letter
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -72,20 +74,86 @@ def clear_all_logs():
         folders[name] = []
 
 
+EXPORT_COLUMNS = [
+    "File",
+    "Drain voltage",
+    "Linear or saturation",
+    "Gate voltage range",
+    "Gate voltage step",
+    "On current (A/um)",
+    "Off current (A/um)",
+    "on-off ratio",
+    "Field-effect mobility",
+    "threshold voltage (V)",
+    "subthreshold swing (mV/dec)",
+]
+
+
 def log_dataframe(folder_name):
     folders = st.session_state["analysis_log_folders"]
     records = folders.get(folder_name, [])
     if not records:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=EXPORT_COLUMNS)
 
     rows = []
     for record in records:
-        row = {
-            key: value for key, value in record.items()
-            if not key.startswith("_")
-        }
-        rows.append(row)
-    return pd.DataFrame(rows)
+        rows.append({
+            "File": record.get("File", ""),
+            "Drain voltage": record.get("Drain voltage (V)", np.nan),
+            "Linear or saturation": record.get("Operating mode", ""),
+            "Gate voltage range": record.get("Gate voltage range", ""),
+            "Gate voltage step": record.get("Gate voltage step (V)", np.nan),
+            "On current (A/um)": sci_plain(
+                record.get("ON current / Width (A/μm)", np.nan)
+            ),
+            "Off current (A/um)": sci_plain(
+                record.get("OFF current / Width (A/μm)", np.nan)
+            ),
+            "on-off ratio": sci_plain(
+                record.get("ON/OFF ratio", np.nan)
+            ),
+            "Field-effect mobility": record.get(
+                "Forward mobility (cm²/V·s)", np.nan
+            ),
+            "threshold voltage (V)": record.get(
+                "Forward Vth (V)", np.nan
+            ),
+            "subthreshold swing (mV/dec)": record.get(
+                "Forward SS (mV/dec)", np.nan
+            ),
+        })
+
+    return pd.DataFrame(rows, columns=EXPORT_COLUMNS)
+
+
+def autosize_worksheet(ws):
+    """Adjust each column width based on cell content."""
+    for column_cells in ws.columns:
+        max_length = 0
+        column_letter = get_column_letter(column_cells[0].column)
+
+        for cell in column_cells:
+            value = "" if cell.value is None else str(cell.value)
+            # multiline content: use longest line
+            length = max((len(line) for line in value.splitlines()), default=0)
+            max_length = max(max_length, length)
+
+        ws.column_dimensions[column_letter].width = min(max(max_length + 3, 12), 45)
+
+
+def style_parameter_sheet(ws):
+    """Light-green header row with readable alignment."""
+    header_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
+    header_font = Font(bold=True, color="006100")
+
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    autosize_worksheet(ws)
 
 
 def folder_excel_bytes(folder_name):
@@ -94,19 +162,8 @@ def folder_excel_bytes(folder_name):
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Parameters", index=False)
-
-        # 간단한 summary 시트
-        if not df.empty:
-            numeric = df.select_dtypes(include=[np.number])
-            if not numeric.empty:
-                summary = pd.DataFrame({
-                    "Parameter": numeric.columns,
-                    "Mean": numeric.mean().values,
-                    "Std": numeric.std().values,
-                    "Min": numeric.min().values,
-                    "Max": numeric.max().values,
-                })
-                summary.to_excel(writer, sheet_name="Summary", index=False)
+        ws = writer.book["Parameters"]
+        style_parameter_sheet(ws)
 
     output.seek(0)
     return output.getvalue()
@@ -173,10 +230,16 @@ if project_names:
         st.sidebar.markdown("**Saved logs**")
         for log_idx, log_record in enumerate(active_logs, start=1):
             log_name_col, log_delete_col = st.sidebar.columns([6, 1])
-            log_name_col.caption(
-                f"{log_idx}. {log_record.get('File', '')} · "
-                f"{log_record.get('Sheet', '')}"
-            )
+
+            if log_name_col.button(
+                f"{log_idx}. {log_record.get('File', '')} · {log_record.get('Sheet', '')}",
+                key=f"open_log_{active_project}_{log_record['_log_id']}",
+                use_container_width=True,
+                help="저장 당시 분석 상태로 열기",
+            ):
+                restore_log_state(log_record)
+                st.rerun()
+
             if log_delete_col.button(
                 "✕",
                 key=f"sidebar_delete_{active_project}_{log_record['_log_id']}",
@@ -216,12 +279,33 @@ st.sidebar.markdown("---")
 # Sidebar: device information
 # ============================================================
 st.sidebar.header("Device Information")
-operating_mode = st.sidebar.radio("Operating Mode", ["Linear", "Saturation"])
+restored_mode = st.session_state.get("restored_operating_mode")
+mode_index = 1 if restored_mode == "Saturation" else 0
+operating_mode = st.sidebar.radio(
+    "Operating Mode",
+    ["Linear", "Saturation"],
+    index=mode_index,
+    key="operating_mode_widget",
+)
 st.sidebar.markdown("---")
 
-W = st.sidebar.number_input("Width (μm)", value=1000.0, step=50.0)
-L = st.sidebar.number_input("Length (μm)", value=100.0, step=50.0)
-Cox_nf = st.sidebar.number_input("Capacitance (nF/cm⁻²)", value=34.5)
+W = st.sidebar.number_input(
+    "Width (μm)",
+    value=float(st.session_state.get("restored_W") or 1000.0),
+    step=50.0,
+    key="width_widget",
+)
+L = st.sidebar.number_input(
+    "Length (μm)",
+    value=float(st.session_state.get("restored_L") or 100.0),
+    step=50.0,
+    key="length_widget",
+)
+Cox_nf = st.sidebar.number_input(
+    "Capacitance (nF/cm⁻²)",
+    value=float(st.session_state.get("restored_Cox_nf") or 34.5),
+    key="cox_widget",
+)
 Cox = Cox_nf * 1e-9
 
 # ============================================================
@@ -242,11 +326,22 @@ def make_card(title, value, color):
 
 
 def sci(value, digits=2):
-    if not np.isfinite(value) or value <= 0:
-        return "N/A"
-    exp = int(np.floor(np.log10(value)))
+    """HTML scientific notation: xx × 10^xx."""
+    if not np.isfinite(value) or value == 0:
+        return "N/A" if not np.isfinite(value) else "0"
+    exp = int(np.floor(np.log10(abs(value))))
     coef = value / (10 ** exp)
-    return f"{coef:.{digits}f}E{exp}"
+    return f"{coef:.{digits}f} × 10<sup>{exp}</sup>"
+
+
+def sci_plain(value, digits=2):
+    """Excel/plain-text scientific notation."""
+    if not np.isfinite(value) or value == 0:
+        return "N/A" if not np.isfinite(value) else "0"
+    exp = int(np.floor(np.log10(abs(value))))
+    coef = value / (10 ** exp)
+    return f"{coef:.{digits}f} × 10^{exp}"
+
 
 
 def calculate_ss(id_vals, vg_vals):
@@ -618,6 +713,34 @@ def render_discrete_vg_control(
 
 
 
+
+def restore_log_state(record):
+    """
+    Restore the saved analysis state.
+    File bytes cannot be persisted in session_state across app restarts,
+    but within the current session the uploaded file bytes are stored in the log.
+    """
+    st.session_state["restored_log_id"] = record.get("_log_id")
+    st.session_state["restored_file_name"] = record.get("File", "")
+    st.session_state["restored_file_bytes"] = record.get("_file_bytes")
+    st.session_state["restored_sheet"] = record.get("Sheet")
+    st.session_state["restored_operating_mode"] = record.get("Operating mode")
+    st.session_state["restored_W"] = record.get("Width (μm)")
+    st.session_state["restored_L"] = record.get("Length (μm)")
+    st.session_state["restored_Cox_nf"] = record.get("Cox (nF/cm²)")
+    st.session_state["restored_peak_vg_fwd"] = record.get("Forward peak Vg (V)")
+    st.session_state["restored_peak_vg_bwd"] = record.get("Backward peak Vg (V)")
+    st.session_state["restored_current_vg_fwd"] = record.get("Selected Forward Vg (V)")
+    st.session_state["restored_current_vg_bwd"] = record.get("Selected Backward Vg (V)")
+    st.session_state["restored_removed_fwd"] = record.get("_removed_fwd_indices", [])
+    st.session_state["restored_removed_bwd"] = record.get("_removed_bwd_indices", [])
+    st.session_state["restore_pending"] = True
+
+
+def consume_restore_value(key, default=None):
+    return st.session_state.pop(key, default)
+
+
 # ============================================================
 # Upload
 # ============================================================
@@ -626,6 +749,12 @@ uploaded_file = st.file_uploader(
     "측정된 엑셀 파일을 업로드하세요",
     type=["xlsx", "xls"],
 )
+
+# Saved log clicked: reconstruct the uploaded file in-memory
+if st.session_state.get("restore_pending") and st.session_state.get("restored_file_bytes"):
+    restored_buffer = io.BytesIO(st.session_state["restored_file_bytes"])
+    restored_buffer.name = st.session_state.get("restored_file_name", "restored.xlsx")
+    uploaded_file = restored_buffer
 
 if uploaded_file:
     file_id = f"{uploaded_file.name}_{uploaded_file.size}"
@@ -640,9 +769,15 @@ if uploaded_file:
         st.stop()
 
     st.sidebar.markdown("---")
+    sheet_options = target_sheets + ["Average (All Sheets)"]
+    restored_sheet = st.session_state.get("restored_sheet")
+    sheet_index = sheet_options.index(restored_sheet) if restored_sheet in sheet_options else 0
+
     selected_sheet = st.sidebar.selectbox(
         "📂 Select Data Sheet",
-        target_sheets + ["Average (All Sheets)"],
+        sheet_options,
+        index=sheet_index,
+        key="sheet_selector_widget",
     )
 
     # ========================================================
@@ -691,8 +826,8 @@ if uploaded_file:
         st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
         o1, o2, o3, o4 = st.columns(4)
         o1.markdown(make_card("On/Off Ratio", sci(p["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-        o2.markdown(make_card("ON Current / Width", f"{p['on_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o3.markdown(make_card("OFF Current / Width", f"{p['off_density']:.3E} A/μm", "#5B5F97"), unsafe_allow_html=True)
+        o2.markdown(make_card("ON Current / Width", f"{sci(p['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+        o3.markdown(make_card("OFF Current / Width", f"{sci(p['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
         o4.markdown(make_card("Hysteresis", f"{p['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
 
     # ========================================================
@@ -715,6 +850,35 @@ if uploaded_file:
         keys = res["keys"]
         fwd = res["fwd"]
         bwd = res["bwd"]
+
+        # Apply saved log state once, then rerun with restored selections.
+        if st.session_state.get("restore_pending"):
+            st.session_state[keys["removed_fwd"]] = list(
+                st.session_state.get("restored_removed_fwd", [])
+            )
+            st.session_state[keys["removed_bwd"]] = list(
+                st.session_state.get("restored_removed_bwd", [])
+            )
+
+            if st.session_state.get("restored_peak_vg_fwd") is not None:
+                st.session_state[keys["peak_slider_fwd"]] = float(
+                    st.session_state["restored_peak_vg_fwd"]
+                )
+            if st.session_state.get("restored_peak_vg_bwd") is not None:
+                st.session_state[keys["peak_slider_bwd"]] = float(
+                    st.session_state["restored_peak_vg_bwd"]
+                )
+            if st.session_state.get("restored_current_vg_fwd") is not None:
+                st.session_state[keys["current_slider_fwd"]] = float(
+                    st.session_state["restored_current_vg_fwd"]
+                )
+            if st.session_state.get("restored_current_vg_bwd") is not None:
+                st.session_state[keys["current_slider_bwd"]] = float(
+                    st.session_state["restored_current_vg_bwd"]
+                )
+
+            st.session_state["restore_pending"] = False
+            st.rerun()
 
         # ====================================================
         # Peak point adjustment
@@ -876,8 +1040,8 @@ if uploaded_file:
         )
 
         st.sidebar.caption(
-            f"Fwd: {current_f_density:.2E} A/μm · "
-            f"Bwd: {current_b_density:.2E} A/μm"
+            f"Fwd: {sci_plain(current_f_density)} A/μm · "
+            f"Bwd: {sci_plain(current_b_density)} A/μm"
         )
 
         # ====================================================
@@ -906,16 +1070,16 @@ if uploaded_file:
         st.markdown("<h4>Overall Device Parameters</h4>", unsafe_allow_html=True)
         o1, o2, o3, o4 = st.columns(4)
         o1.markdown(make_card("On/Off Ratio", sci(params["onoff"]), "#5B5F97"), unsafe_allow_html=True)
-        o2.markdown(make_card("ON Current / Width", f"{params['on_density']:.2E} A/μm", "#5B5F97"), unsafe_allow_html=True)
-        o3.markdown(make_card("OFF Current / Width", f"{params['off_density']:.2E} A/μm", "#5B5F97"), unsafe_allow_html=True)
+        o2.markdown(make_card("ON Current / Width", f"{sci(params['on_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
+        o3.markdown(make_card("OFF Current / Width", f"{sci(params['off_density'])} A/μm", "#5B5F97"), unsafe_allow_html=True)
         o4.markdown(make_card("Hysteresis", f"{params['hysteresis']:.2f} V", "#5B5F97"), unsafe_allow_html=True)
 
         st.markdown("<h4 style='color:#555;'>Selected Transfer Current Density</h4>", unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
         c1.markdown(make_card("Forward Vg", f"{float(current_f_row['GateV']):.2f} V", "#2E60AB"), unsafe_allow_html=True)
-        c2.markdown(make_card("Forward |Id| / W", f"{current_f_density:.2E} A/μm", "#2E60AB"), unsafe_allow_html=True)
+        c2.markdown(make_card("Forward |Id| / W", f"{sci(current_f_density)} A/μm", "#2E60AB"), unsafe_allow_html=True)
         c3.markdown(make_card("Backward Vg", f"{float(current_b_row['GateV']):.2f} V", "#F05650"), unsafe_allow_html=True)
-        c4.markdown(make_card("Backward |Id| / W", f"{current_b_density:.2E} A/μm", "#F05650"), unsafe_allow_html=True)
+        c4.markdown(make_card("Backward |Id| / W", f"{sci(current_b_density)} A/μm", "#F05650"), unsafe_allow_html=True)
 
         # ====================================================
         # Save current result to selected folder
@@ -934,8 +1098,19 @@ if uploaded_file:
             use_container_width=True,
             disabled=current_project is None,
         ):
+            # Store file bytes and exact analysis selections for click-to-restore.
+            try:
+                uploaded_file.seek(0)
+                saved_file_bytes = uploaded_file.read()
+                uploaded_file.seek(0)
+            except Exception:
+                saved_file_bytes = None
+
             log_entry = {
                 "_log_id": str(uuid.uuid4()),
+                "_file_bytes": saved_file_bytes,
+                "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
+                "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
                 "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "File": uploaded_file.name,
                 "Sheet": selected_sheet,
@@ -944,6 +1119,13 @@ if uploaded_file:
                 "Length (μm)": float(L),
                 "Cox (nF/cm²)": float(Cox_nf),
                 "Drain voltage (V)": float(res["vd"]),
+                "Gate voltage range": (
+                    f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
+                    f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+                ),
+                "Gate voltage step (V)": float(
+                    np.median(np.abs(np.diff(fwd["GateV"])))
+                ) if len(fwd) > 1 else np.nan,
                 "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
                 "Forward Vth (V)": float(params["vth_fwd"]),
                 "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
