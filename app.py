@@ -71,6 +71,46 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stVerticalBlock"] {
 div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
     gap: 0.35rem !important;
 }
+
+/* Direction-aware compact summary */
+.data-header-row {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    margin:2px 0 4px 0;
+}
+.top-param-card {
+    min-height:78px;
+    padding:8px 10px;
+    border-radius:8px;
+    background:rgba(120,120,120,0.055);
+}
+.top-param-title {
+    font-size:13px;
+    font-weight:800;
+    color:#555;
+    margin-bottom:5px;
+}
+.top-param-value {
+    font-size:20px;
+    font-weight:850;
+    line-height:1.2;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.compact-slider-area {
+    margin-top:-34px;
+}
+.compact-slider-area div[data-testid="stSelectSlider"] label,
+.compact-slider-area div[data-testid="stButton"] button p {
+    font-size:10px !important;
+}
+.direction-caption {
+    font-size:12px;
+    font-weight:800;
+    margin-bottom:2px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -265,14 +305,16 @@ def remove_mobility_point(
     st.session_state[force_key] = True
     # Recalculate every default from the remaining active data on rerun.
     for selector_key in selector_keys:
-        st.session_state.pop(selector_key, None)
+        if selector_key:
+            st.session_state.pop(selector_key, None)
 
 
 def reset_mobility_points(removed_key, force_key, selector_keys=()):
     st.session_state[removed_key] = []
     st.session_state[force_key] = True
     for selector_key in selector_keys:
-        st.session_state.pop(selector_key, None)
+        if selector_key:
+            st.session_state.pop(selector_key, None)
 
 
 def set_state_value(state_key, value):
@@ -971,6 +1013,87 @@ def build_active_sweep(part, removed_source_indices):
     return active
 
 
+
+def normalize_excel_label(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+
+
+def standardize_measurement_columns(df):
+    aliases = {
+        "gatev": "GateV",
+        "gatevoltage": "GateV",
+        "vg": "GateV",
+        "draini": "DrainI",
+        "draincurrent": "DrainI",
+        "id": "DrainI",
+        "drainv": "DrainV",
+        "drainvoltage": "DrainV",
+        "vd": "DrainV",
+        "vds": "DrainV",
+        "gatei": "GateI",
+        "gatecurrent": "GateI",
+        "ig": "GateI",
+    }
+    rename_map = {}
+    for column in df.columns:
+        normalized = normalize_excel_label(column)
+        if normalized in aliases:
+            rename_map[column] = aliases[normalized]
+    return df.rename(columns=rename_map)
+
+
+def extract_drain_v_from_calc(xls):
+    """Find a Drain V value in the Calc sheet."""
+    calc_sheet = next(
+        (name for name in xls.sheet_names if name.strip().lower() == "calc"),
+        None,
+    )
+    if calc_sheet is None:
+        return None
+
+    labels = {"drainv", "drainvoltage", "vd", "vds"}
+
+    try:
+        calc_df = xls.parse(calc_sheet)
+        for column in calc_df.columns:
+            if normalize_excel_label(column) in labels:
+                numeric = pd.to_numeric(calc_df[column], errors="coerce").dropna()
+                if not numeric.empty:
+                    return float(numeric.iloc[0])
+    except Exception:
+        pass
+
+    try:
+        raw = xls.parse(calc_sheet, header=None)
+    except Exception:
+        return None
+
+    rows, cols = raw.shape
+    for row in range(rows):
+        for col in range(cols):
+            if normalize_excel_label(raw.iat[row, col]) not in labels:
+                continue
+
+            nearby = []
+            for delta_col in (1, 2, -1, -2):
+                candidate_col = col + delta_col
+                if 0 <= candidate_col < cols:
+                    nearby.append(raw.iat[row, candidate_col])
+            for delta_row in (1, 2, -1, -2):
+                candidate_row = row + delta_row
+                if 0 <= candidate_row < rows:
+                    nearby.append(raw.iat[candidate_row, col])
+
+            for value in nearby:
+                numeric = pd.to_numeric(
+                    pd.Series([value]), errors="coerce"
+                ).iloc[0]
+                if pd.notna(numeric):
+                    return float(numeric)
+
+    return None
+
+
 def analyze_sheet(df, file_id, sheet_name):
     if W <= 0 or L <= 0 or Cox <= 0:
         raise ValueError("Width, Length, Capacitance는 모두 0보다 커야 합니다.")
@@ -1238,12 +1361,12 @@ with main_content:
         file_id = f"{file_name}_{file_size}"
         xls = pd.ExcelFile(uploaded_file)
         target_sheets = [
-            s for s in xls.sheet_names
-            if s == "Data" or s.lower().startswith("append")
+            sheet_name for sheet_name in xls.sheet_names
+            if sheet_name.strip().lower() not in {"calc", "settings"}
         ]
 
         if not target_sheets:
-            st.error("분석할 수 있는 시트('Data' 또는 'Append...')가 없습니다.")
+            st.error("Calc와 Settings를 제외한 분석 가능한 시트가 없습니다.")
             st.stop()
 
         restored_sheet = st.session_state.get("restored_sheet")
@@ -1320,12 +1443,27 @@ with main_content:
         # Single-sheet mode
         # ========================================================
         else:
-            df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
-            required = {"GateV", "DrainI", "DrainV"}
+            df = standardize_measurement_columns(
+                xls.parse(selected_sheet)
+            )
 
-            if not required.issubset(df.columns):
-                st.error("GateV, DrainI, DrainV 컬럼이 필요합니다.")
+            if not {"GateV", "DrainI"}.issubset(df.columns):
+                st.error("GateV와 DrainI 컬럼이 필요합니다.")
                 st.stop()
+
+            if "DrainV" not in df.columns:
+                calc_drain_v = extract_drain_v_from_calc(xls)
+                if calc_drain_v is None:
+                    st.error(
+                        "선택한 시트에 DrainV가 없고 Calc 시트에서도 "
+                        "Drain V 값을 찾지 못했습니다."
+                    )
+                    st.stop()
+                df["DrainV"] = float(calc_drain_v)
+                st.caption(
+                    f"Drain V = {calc_drain_v:g} V "
+                    f"(Calc 시트에서 불러옴)"
+                )
 
             # Apply saved state before analysis so removed points and selected peaks
             # are reflected immediately in the reconstructed curves.
@@ -1591,11 +1729,27 @@ with main_content:
                 else np.nan
             )
 
-            # Data title only; project controls are above the uploader.
-            st.markdown(
-                f"<h3 style='color:#333; margin:2px 0 6px 0;'>"
+            # Data title and direction selector.
+            header_title_col, header_direction_col = st.columns(
+                [5.2, 1.8], gap="small"
+            )
+            header_title_col.markdown(
+                f"<h3 style='color:#333;margin:2px 0 4px 0;'>"
                 f"📊 {selected_sheet} ({operating_mode})</h3>",
                 unsafe_allow_html=True,
+            )
+            selected_direction = header_direction_col.radio(
+                "Direction",
+                ["Forward", "Reverse"],
+                horizontal=True,
+                key=(
+                    f"direction_view_{file_id}_{selected_sheet}_"
+                    f"{operating_mode}"
+                ),
+                label_visibility="collapsed",
+            )
+            active_state = (
+                f_state if selected_direction == "Forward" else r_state
             )
 
             def build_current_log_entry(log_id=None):
@@ -1746,6 +1900,70 @@ with main_content:
 
 
             # ====================================================
+            # Direction-aware parameter summary above plots
+            # ====================================================
+            direction_color = (
+                "#2E60AB" if selected_direction == "Forward" else "#D94B45"
+            )
+
+            def render_top_parameter(title, value):
+                st.markdown(
+                    f"<div class='top-param-card'>"
+                    f"<div class='top-param-title'>{title}</div>"
+                    f"<div class='top-param-value' style='color:{direction_color};'>"
+                    f"{value}</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+            top_row_1 = st.columns(3, gap="small")
+            with top_row_1[0]:
+                render_top_parameter(
+                    "ON Current / Width",
+                    f"{sci(active_state['on_density'])} A/μm",
+                )
+            with top_row_1[1]:
+                render_top_parameter(
+                    "OFF Current / Width",
+                    f"{sci(active_state['off_density'])} A/μm",
+                )
+            with top_row_1[2]:
+                render_top_parameter(
+                    "ON/OFF Ratio",
+                    sci(active_state["onoff"]),
+                )
+
+            top_row_2 = st.columns(4, gap="small")
+            with top_row_2[0]:
+                render_top_parameter(
+                    "Mobility",
+                    f"{active_state['mobility']:.2f} cm²/V·s",
+                )
+            with top_row_2[1]:
+                render_top_parameter(
+                    "Vₜₕ",
+                    (
+                        f"{active_state['vth']:.2f} V"
+                        if np.isfinite(active_state["vth"]) else "N/A"
+                    ),
+                )
+            with top_row_2[2]:
+                render_top_parameter(
+                    "Hysteresis",
+                    (
+                        f"{selected_hysteresis:.2f} V"
+                        if np.isfinite(selected_hysteresis) else "N/A"
+                    ),
+                )
+            with top_row_2[3]:
+                render_top_parameter(
+                    "SS",
+                    (
+                        f"{active_state['ss']:.1f} mV/dec"
+                        if np.isfinite(active_state["ss"]) else "N/A"
+                    ),
+                )
+
+            # ====================================================
             # Four horizontal plots
             # ====================================================
             graph_mobility_title = (
@@ -1769,18 +1987,25 @@ with main_content:
             vg_bwd = bwd["GateV"]
             id_bwd = bwd["DrainI_active"]
 
+            selected_vg = (
+                vg_fwd if selected_direction == "Forward" else vg_bwd
+            )
+            selected_id = (
+                id_fwd if selected_direction == "Forward" else id_bwd
+            )
+            selected_color = (
+                "blue" if selected_direction == "Forward" else "red"
+            )
+
             for col_num in (1, 3):
                 fig.add_trace(
                     go.Scatter(
-                        x=vg_fwd, y=np.abs(id_fwd), name="Id Forward",
-                        line=dict(color="blue"), showlegend=(col_num == 1),
-                    ), row=1, col=col_num,
-                )
-                fig.add_trace(
-                    go.Scatter(
-                        x=vg_bwd, y=np.abs(id_bwd), name="Id Reverse",
-                        line=dict(color="red"), showlegend=(col_num == 1),
-                    ), row=1, col=col_num,
+                        x=selected_vg,
+                        y=np.abs(selected_id),
+                        line=dict(color=selected_color),
+                        showlegend=False,
+                    ),
+                    row=1, col=col_num,
                 )
 
             if "GateI" in df.columns:
@@ -1791,31 +2016,26 @@ with main_content:
                 ig_b = gate_i.iloc[
                     bwd["__source_index"].astype(int).to_numpy()
                 ].reset_index(drop=True)
+                selected_ig = (
+                    ig_f if selected_direction == "Forward" else ig_b
+                )
                 for col_num in (1, 3):
                     fig.add_trace(
                         go.Scatter(
-                            x=vg_fwd, y=np.abs(ig_f), name="Ig Forward",
+                            x=selected_vg,
+                            y=np.abs(selected_ig),
                             line=dict(color="dimgray", dash="dot"),
-                            showlegend=(col_num == 1),
-                        ), row=1, col=col_num,
-                    )
-                    fig.add_trace(
-                        go.Scatter(
-                            x=vg_bwd, y=np.abs(ig_b), name="Ig Reverse",
-                            line=dict(color="black", dash="dot"),
-                            showlegend=(col_num == 1),
-                        ), row=1, col=col_num,
+                            showlegend=False,
+                        ),
+                        row=1, col=col_num,
                     )
 
-            # ON/OFF markers for both directions.
-            marker_specs = (
-                (f_state, "circle-open", "green", "Fwd ON", "on_row"),
-                (f_state, "square-open", "orange", "Fwd OFF", "off_row"),
-                (r_state, "circle", "green", "Rev ON", "on_row"),
-                (r_state, "square", "orange", "Rev OFF", "off_row"),
-            )
-            for state, symbol, color, label, row_key in marker_specs:
-                row_data = state[row_key]
+            # ON/OFF markers for the selected direction.
+            for symbol, color, row_key in (
+                ("circle", "green", "on_row"),
+                ("square", "orange", "off_row"),
+            ):
+                row_data = active_state[row_key]
                 for col_num in (1, 3):
                     fig.add_trace(
                         go.Scatter(
@@ -1823,104 +2043,125 @@ with main_content:
                             y=[abs(float(row_data["DrainI_active"]))],
                             mode="markers",
                             marker=dict(symbol=symbol, size=10, color=color),
-                            name=label,
-                            showlegend=(col_num == 1),
-                        ), row=1, col=col_num,
+                            showlegend=False,
+                        ),
+                        row=1, col=col_num,
                     )
 
             # Mobility curves and independently selected peak lines.
             fig.add_trace(
-                go.Scatter(x=vg_fwd, y=res["mu_fwd"], name="Mobility Forward",
-                           line=dict(color="blue"), showlegend=False),
+                go.Scatter(
+                    x=active_state["df"]["GateV"],
+                    y=active_state["mu_curve"],
+                    line=dict(color=active_state["color"]),
+                    showlegend=False,
+                ),
                 row=1, col=2,
+            )
+            fig.add_vline(
+                x=active_state["peak_vg"],
+                line_dash="dot",
+                line_width=1.5,
+                line_color=active_state["color"],
+                row=1, col=2,
+            )
+
+            # Peak-elimination target for the selected direction.
+            selected_elimination_row = (
+                selected_f_row
+                if selected_direction == "Forward"
+                else selected_b_row
+            )
+            selected_elimination_mu = (
+                selected_f_mu
+                if selected_direction == "Forward"
+                else selected_b_mu
             )
             fig.add_trace(
-                go.Scatter(x=vg_bwd, y=res["mu_bwd"], name="Mobility Reverse",
-                           line=dict(color="red"), showlegend=False),
-                row=1, col=2,
-            )
-            for state in (f_state, r_state):
-                fig.add_vline(
-                    x=state["peak_vg"], line_dash="dot", line_width=1.5,
-                    line_color=state["color"], row=1, col=2,
-                )
-
-            # Peak-elimination targets are shown as X marks before removal.
-            elimination_specs = (
-                (selected_f_row, selected_f_mu, "blue"),
-                (selected_b_row, selected_b_mu, "red"),
-            )
-            for selected_row, selected_mu, selected_color in elimination_specs:
-                fig.add_trace(
-                    go.Scatter(
-                        x=[float(selected_row["GateV"])],
-                        y=[float(selected_mu)],
-                        mode="markers",
-                        marker=dict(
-                            symbol="x", size=12, color=selected_color,
-                            line=dict(width=2, color=selected_color),
-                        ),
-                        showlegend=False,
-                        hovertemplate=(
-                            "Elimination target<br>Vg=%{x:.3g} V"
-                            "<br>Mobility=%{y:.3g}<extra></extra>"
-                        ),
+                go.Scatter(
+                    x=[float(selected_elimination_row["GateV"])],
+                    y=[float(selected_elimination_mu)],
+                    mode="markers",
+                    marker=dict(
+                        symbol="x",
+                        size=12,
+                        color=active_state["color"],
+                        line=dict(width=2, color=active_state["color"]),
                     ),
-                    row=1, col=2,
+                    showlegend=False,
+                ),
+                row=1, col=2,
+            )
+
+            # SS curve for selected direction.
+            fig.add_trace(
+                go.Scatter(
+                    x=active_state["df"]["GateV"],
+                    y=active_state["ss_curve"],
+                    line=dict(color=active_state["color"]),
+                    showlegend=False,
+                ),
+                row=1, col=4,
+            )
+            if np.isfinite(active_state["ss"]):
+                fig.add_hline(
+                    y=active_state["ss"],
+                    line_dash="dot",
+                    line_width=1.5,
+                    line_color=active_state["color"],
+                    row=1, col=4,
                 )
 
-            # SS curves. Selected SS values use horizontal dotted lines.
-            fig.add_trace(
-                go.Scatter(x=vg_fwd, y=f_state["ss_curve"], name="SS Forward",
-                           line=dict(color="blue"), showlegend=False),
-                row=1, col=4,
+            # Tangent for selected direction.
+            state = active_state
+            x_all = np.asarray(state["df"]["GateV"], dtype=float)
+            y_all = np.abs(
+                np.asarray(state["df"]["DrainI_active"], dtype=float)
             )
-            fig.add_trace(
-                go.Scatter(x=vg_bwd, y=r_state["ss_curve"], name="SS Reverse",
-                           line=dict(color="red"), showlegend=False),
-                row=1, col=4,
+            tangent_idx = state["vth_idx"]
+            slope_abs = np.gradient(y_all, x_all)[tangent_idx]
+            tangent_y = (
+                y_all[tangent_idx]
+                + slope_abs * (x_all - x_all[tangent_idx])
             )
-            for state in (f_state, r_state):
-                if np.isfinite(state["ss"]):
-                    fig.add_hline(
-                        y=state["ss"], line_dash="dot", line_width=1.5,
-                        line_color=state["color"], row=1, col=4,
-                    )
-
-            # Full dotted tangent for each direction on the displayed |Id| curve.
-            for state in (f_state, r_state):
-                x_all = np.asarray(state["df"]["GateV"], dtype=float)
-                y_all = np.abs(np.asarray(state["df"]["DrainI_active"], dtype=float))
-                idx = state["vth_idx"]
-                slope_abs = np.gradient(y_all, x_all)[idx]
-                tangent_y = y_all[idx] + slope_abs * (x_all - x_all[idx])
-                valid = np.isfinite(tangent_y) & (tangent_y >= 0)
-                if valid.sum() >= 2:
-                    fig.add_trace(
-                        go.Scatter(
-                            x=x_all[valid],
-                            y=tangent_y[valid],
-                            name=f"{state['name']} tangent",
-                            line=dict(color=state["color"], dash="dot", width=1.6),
-                            showlegend=False,
-                        ),
-                        row=1, col=3,
-                    )
+            valid_tangent = np.isfinite(tangent_y) & (tangent_y >= 0)
+            if valid_tangent.sum() >= 2:
                 fig.add_trace(
                     go.Scatter(
-                        x=[state["vth_vg"]],
-                        y=[abs(float(state["df"]["DrainI_active"].iloc[idx]))],
-                        mode="markers",
-                        marker=dict(
-                            size=9,
+                        x=x_all[valid_tangent],
+                        y=tangent_y[valid_tangent],
+                        line=dict(
                             color=state["color"],
-                            symbol="circle",
-                            line=dict(width=1, color="white"),
+                            dash="dot",
+                            width=1.6,
                         ),
                         showlegend=False,
                     ),
                     row=1, col=3,
                 )
+            fig.add_trace(
+                go.Scatter(
+                    x=[state["vth_vg"]],
+                    y=[
+                        abs(
+                            float(
+                                state["df"]["DrainI_active"].iloc[
+                                    tangent_idx
+                                ]
+                            )
+                        )
+                    ],
+                    mode="markers",
+                    marker=dict(
+                        size=9,
+                        color=state["color"],
+                        symbol="circle",
+                        line=dict(width=1, color="white"),
+                    ),
+                    showlegend=False,
+                ),
+                row=1, col=3,
+            )
 
             common_axis = dict(
                 ticks="outside", showline=True, mirror=True, showgrid=True,
@@ -2017,152 +2258,163 @@ with main_content:
 
             # ====================================================
             # ====================================================
-            # Plot-aligned parameter regions
             # ====================================================
-            ratio_line = (
-                f"<div class='parameter-emphasis'>ON/OFF Ratio&nbsp;&nbsp;"
-                f"<span style='color:#2E60AB;'>F {sci(f_state['onoff'])}</span>"
-                f" &nbsp;|&nbsp; "
-                f"<span style='color:#D94B45;'>R {sci(r_state['onoff'])}</span>"
-                f"</div>"
+            # Selected-direction controls directly below plots
+            # ====================================================
+            st.markdown(
+                "<div class='compact-slider-area'></div>",
+                unsafe_allow_html=True,
             )
-            hysteresis_line = (
-                f"<div class='parameter-emphasis'>Hysteresis&nbsp;&nbsp;"
-                f"<span style='color:#5B5F97;'>{selected_hysteresis:.2f} V</span>"
-                f"</div>"
-                if np.isfinite(selected_hysteresis)
-                else "<div class='parameter-emphasis'>Hysteresis&nbsp;&nbsp;N/A</div>"
-            )
+            control_columns = st.columns(4, gap="small")
 
-            parameter_columns = st.columns(4, gap="small")
-
-            # 1) Transfer (Log): ratio, ON, OFF
-            with parameter_columns[0]:
-                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
-                st.markdown(ratio_line, unsafe_allow_html=True)
-                dual_metric_box(
-                    "ON Current / Width (A/μm)",
-                    sci(f_state["on_density"]),
-                    sci(r_state["on_density"]),
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["on_key"],
-                        float(f_state["df"]["GateV"].iloc[f_state["on_auto_idx"]]),
-                        "Forward ON Vg",
-                        f"on_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["on_key"],
-                        float(r_state["df"]["GateV"].iloc[r_state["on_auto_idx"]]),
-                        "Reverse ON Vg",
-                        f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-                dual_metric_box(
-                    "OFF Current / Width (A/μm)",
-                    sci(f_state["off_density"]),
-                    sci(r_state["off_density"]),
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["off_key"],
-                        float(f_state["df"]["GateV"].iloc[f_state["off_auto_idx"]]),
-                        "Forward OFF Vg",
-                        f"off_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["off_key"],
-                        float(r_state["df"]["GateV"].iloc[r_state["off_auto_idx"]]),
-                        "Reverse OFF Vg",
-                        f"off_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # 2) Mobility: mobility slider and peak elimination
-            with parameter_columns[1]:
-                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
-                with st.container(border=False):
-                    st.markdown(
-                        "<div class='metric-title'>Mobility (cm²/V·s)</div>",
-                        unsafe_allow_html=True,
-                    )
-                    mob_f_col, mob_r_col = st.columns([1, 1], gap="medium")
-                    with mob_f_col:
-                        st.markdown(
-                            f"<div style='color:#2E60AB;font-size:12px;font-weight:750;'>"
-                            f"Forward</div><div class='metric-value'>"
-                            f"{f_state['mobility']:.2f}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        slider_with_auto(
-                            mob_f_col, f_state, f_state["peak_key"],
-                            f_state["peak_default"], "Forward mobility Vg",
-                            f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                        )
-                        st.markdown(
-                            "<div style='font-size:12px;font-weight:800;margin-top:8px;'>"
-                            "Peak Elimination</div>",
-                            unsafe_allow_html=True,
-                        )
-                        render_removal_control(
-                            f_state, mob_f_col, keys["removed_fwd"],
-                            keys["remove_slider_fwd"], keys["force_auto_peak_fwd"],
-                        )
-                    with mob_r_col:
-                        st.markdown(
-                            f"<div style='border-left:1px solid rgba(120,120,120,.28);"
-                            f"padding-left:8px;color:#D94B45;font-size:12px;font-weight:750;'>"
-                            f"Reverse</div><div class='metric-value' style='border-left:1px "
-                            f"solid rgba(120,120,120,.28);padding-left:8px;'>"
-                            f"{r_state['mobility']:.2f}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        slider_with_auto(
-                            mob_r_col, r_state, r_state["peak_key"],
-                            r_state["peak_default"], "Reverse mobility Vg",
-                            f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                        )
-                        st.markdown(
-                            "<div style='font-size:12px;font-weight:800;margin-top:8px;'>"
-                            "Peak Elimination</div>",
-                            unsafe_allow_html=True,
-                        )
-                        render_removal_control(
-                            r_state, mob_r_col, keys["removed_bwd"],
-                            keys["remove_slider_bwd"], keys["force_auto_peak_bwd"],
-                        )
-                    # Align the bottom of this region with the OFF section.
-                    st.markdown("<div style='height:42px;'></div>", unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # 3) Transfer (Linear): hysteresis and Vth values derived from mobility points
-            with parameter_columns[2]:
-                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
-                st.markdown(hysteresis_line, unsafe_allow_html=True)
-                dual_metric_box(
-                    "Vₜₕ from Mobility Tangent (V)",
-                    f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
-                    f"{r_state['vth']:.2f}" if np.isfinite(r_state["vth"]) else "N/A",
-                )
+            # Transfer Log: ON and OFF selection
+            with control_columns[0]:
                 st.markdown(
-                    "<div style='font-size:12px;line-height:1.35;margin-top:8px;'>"
-                    "Mobility의 Forward/Reverse Vg를 조절하면 해당 지점의 "
-                    "linear-transfer 접선과 Vₜₕ가 함께 갱신됩니다.</div>",
+                    f"<div class='direction-caption' "
+                    f"style='color:{direction_color};'>"
+                    f"{selected_direction}</div>",
                     unsafe_allow_html=True,
                 )
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # 4) SS curve: automatic values only
-            with parameter_columns[3]:
-                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
-                dual_metric_box(
-                    "SS (mV/dec)",
-                    f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
-                    f"{r_state['ss']:.1f}" if np.isfinite(r_state["ss"]) else "N/A",
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="",
+                    state_key=active_state["on_key"],
+                    active_df=active_state["df"],
+                    default_value=float(
+                        active_state["df"]["GateV"].iloc[
+                            active_state["on_auto_idx"]
+                        ]
+                    ),
+                    button_prefix=(
+                        f"active_on_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=control_columns[0],
                 )
+                control_columns[0].caption("ON")
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="",
+                    state_key=active_state["off_key"],
+                    active_df=active_state["df"],
+                    default_value=float(
+                        active_state["df"]["GateV"].iloc[
+                            active_state["off_auto_idx"]
+                        ]
+                    ),
+                    button_prefix=(
+                        f"active_off_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=control_columns[0],
+                )
+                control_columns[0].caption("OFF")
+
+            # Mobility: selected peak and elimination
+            with control_columns[1]:
                 st.markdown(
-                    "<div style='font-size:12px;line-height:1.35;margin-top:8px;'>"
-                    "각 sweep의 자동 최적 SS 값입니다.</div>",
+                    f"<div class='direction-caption' "
+                    f"style='color:{direction_color};'>"
+                    f"{selected_direction}</div>",
                     unsafe_allow_html=True,
                 )
-                st.markdown("</div>", unsafe_allow_html=True)
+                render_discrete_vg_control(
+                    title="",
+                    slider_label="",
+                    state_key=active_state["peak_key"],
+                    active_df=active_state["df"],
+                    default_value=active_state["peak_default"],
+                    button_prefix=(
+                        f"active_mobility_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=control_columns[1],
+                )
+                control_columns[1].caption("Mobility")
+
+                active_removed_key = (
+                    keys["removed_fwd"]
+                    if selected_direction == "Forward"
+                    else keys["removed_bwd"]
+                )
+                active_remove_key = (
+                    keys["remove_slider_fwd"]
+                    if selected_direction == "Forward"
+                    else keys["remove_slider_bwd"]
+                )
+                active_force_key = (
+                    keys["force_auto_peak_fwd"]
+                    if selected_direction == "Forward"
+                    else keys["force_auto_peak_bwd"]
+                )
+                default_remove_vg = float(
+                    active_state["df"]["GateV"].iloc[
+                        active_state["auto_idx"]
+                    ]
+                )
+                removal_vg = render_discrete_vg_control(
+                    title="",
+                    slider_label="",
+                    state_key=active_remove_key,
+                    active_df=active_state["df"],
+                    default_value=default_remove_vg,
+                    button_prefix=(
+                        f"active_remove_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=control_columns[1],
+                )
+                control_columns[1].caption("Elimination")
+                _, removal_row = nearest_row_by_vg(
+                    active_state["df"], removal_vg
+                )
+                remove_col, reset_col = control_columns[1].columns(
+                    2, gap="small"
+                )
+                remove_col.button(
+                    "Rm",
+                    key=(
+                        f"active_rm_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    use_container_width=True,
+                    on_click=remove_mobility_point,
+                    args=(
+                        active_removed_key,
+                        int(removal_row["__source_index"]),
+                        active_force_key,
+                        (
+                            active_state["peak_key"],
+                            active_state["on_key"],
+                            active_state["off_key"],
+                            active_remove_key,
+                        ),
+                    ),
+                )
+                reset_col.button(
+                    "Rst",
+                    key=(
+                        f"active_rst_{selected_direction}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    use_container_width=True,
+                    on_click=reset_mobility_points,
+                    args=(
+                        active_removed_key,
+                        active_force_key,
+                        (
+                            active_state["peak_key"],
+                            active_state["on_key"],
+                            active_state["off_key"],
+                            active_remove_key,
+                        ),
+                    ),
+                )
+
+            # Linear transfer and SS have no independent sliders.
+            with control_columns[2]:
+                st.caption("Vₜₕ follows the selected Mobility point.")
+            with control_columns[3]:
+                st.caption("SS is automatically calculated.")
+
 
