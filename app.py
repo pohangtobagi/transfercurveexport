@@ -62,6 +62,23 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
     color: #777;
     margin-bottom: 8px;
 }
+
+/* Compact spacing inside the right control column */
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stMarkdownContainer"] p {
+    margin-bottom: 0.2rem;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSlider"] {
+    margin-top: -0.35rem;
+    margin-bottom: -0.45rem;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] {
+    margin-top: -0.15rem;
+    margin-bottom: -0.25rem;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] hr {
+    margin-top: 0.45rem;
+    margin-bottom: 0.45rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -975,7 +992,14 @@ with device_col:
     )
     Cox = Cox_nf * 1e-9
 
-    right_controls = st.container()
+    st.markdown(
+        "<div style='font-size:14px; font-weight:700; margin:8px 0 4px 0;'>"
+        "Analysis Controls</div>",
+        unsafe_allow_html=True,
+    )
+    # Keep the right control area aligned with the central analysis area.
+    # Long controls scroll inside this panel instead of extending the whole page.
+    right_controls = st.container(height=760, border=True)
 
 # Keep the current file active after a log is clicked and across normal reruns.
 if uploaded_file is not None:
@@ -1582,7 +1606,7 @@ with main_content:
                 )
 
                 fig.update_layout(
-                    height=1050,
+                    height=980,
                     autosize=True,
                     template="plotly_white",
                     margin=dict(t=80, b=60, l=75, r=25),
