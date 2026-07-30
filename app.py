@@ -48,12 +48,12 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
 .device-panel {
     border: 1px solid rgba(128, 128, 128, 0.35);
     border-radius: 12px;
-    padding: 14px 16px 8px 16px;
-    margin-bottom: 12px;
+    padding: 9px 12px 5px 12px;
+    margin-bottom: 6px;
     background: rgba(128, 128, 128, 0.06);
 }
 .device-panel-title {
-    font-size: 21px;
+    font-size: 18px;
     font-weight: 750;
     margin-bottom: 2px;
 }
@@ -101,6 +101,44 @@ div[data-testid="stVerticalBlockBorderWrapper"] hr {
 div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] {
     margin-top: -0.2rem !important;
     margin-bottom: -0.25rem !important;
+}
+
+/* Lift only the top-right Device Information / Analysis Controls column */
+div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
+> div[data-testid="stColumn"]:nth-child(2) {
+    transform: translateY(-58px);
+    position: relative;
+    z-index: 2;
+}
+
+/* Compact sidebar controls and saved-log rows */
+section[data-testid="stSidebar"] div[data-testid="stButton"] {
+    margin-top: -0.18rem !important;
+    margin-bottom: -0.22rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    min-height: 28px !important;
+    height: 28px !important;
+    padding: 0 0.42rem !important;
+    border-radius: 6px !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] button p {
+    font-size: 11px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
+    gap: 0.22rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] {
+    margin-top: -0.15rem !important;
+    margin-bottom: -0.1rem !important;
+}
+section[data-testid="stSidebar"] hr {
+    margin-top: 0.45rem !important;
+    margin-bottom: 0.45rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -492,21 +530,40 @@ if project_names:
             key=f"sidebar_export_{active_project}",
         )
 
-        st.sidebar.markdown("**Saved logs**")
+        st.sidebar.markdown(
+            "<div style='font-size:12px; font-weight:700; margin:3px 0 2px 0;'>"
+            "Saved logs</div>",
+            unsafe_allow_html=True,
+        )
         for log_idx, log_record in enumerate(active_logs, start=1):
-            log_name_col, log_delete_col = st.sidebar.columns([6, 1])
+            log_name_col, log_delete_col = st.sidebar.columns([8.5, 1])
+
+            saved_at = str(log_record.get("Saved at", ""))
+            saved_time = saved_at[11:16] if len(saved_at) >= 16 else ""
+            raw_file_name = str(log_record.get("File", ""))
+            compact_file_name = (
+                raw_file_name
+                if len(raw_file_name) <= 24
+                else raw_file_name[:21] + "…"
+            )
+            log_label = f"📄 {compact_file_name}"
+            if saved_time:
+                log_label += f"  {saved_time}"
 
             if log_name_col.button(
-                f"📄 {log_idx}. {log_record.get('File', '')} · {log_record.get('Sheet', '')}",
+                log_label,
                 key=f"open_log_{active_project}_{log_record['_log_id']}",
                 use_container_width=True,
-                help="저장 당시 분석 상태로 열기",
+                help=(
+                    f"{raw_file_name} · {log_record.get('Sheet', '')} · "
+                    f"{saved_at}\n저장 당시 분석 상태로 열기"
+                ),
             ):
                 restore_log_state(log_record)
                 st.rerun()
 
             if log_delete_col.button(
-                "✕",
+                "×",
                 key=f"sidebar_delete_{active_project}_{log_record['_log_id']}",
                 help="이 로그 삭제",
                 use_container_width=True,
@@ -981,6 +1038,10 @@ with main_col:
 
 with device_col:
     st.markdown(
+        '<div class="right-panel-anchor"></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
         """
         <div class="device-panel">
             <div class="device-panel-title">Device Information</div>
@@ -1016,7 +1077,7 @@ with device_col:
     Cox = Cox_nf * 1e-9
 
     st.markdown(
-        "<div style='font-size:14px; font-weight:700; margin:8px 0 4px 0;'>"
+        "<div style='font-size:12px; font-weight:700; margin:3px 0 2px 0;'>"
         "Analysis Controls</div>",
         unsafe_allow_html=True,
     )
