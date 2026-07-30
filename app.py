@@ -2,6 +2,8 @@
 import io
 import re
 import uuid
+import pickle
+from pathlib import Path
 from datetime import datetime
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
@@ -66,45 +68,121 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
 # ============================================================
 # Session log / folder helpers
 # ============================================================
+STORAGE_DIR = Path(__file__).resolve().parent / ".fet_storage"
+STORAGE_FILE = STORAGE_DIR / "projects.pkl"
+
+
+def _default_persistent_state():
+    return {
+        "folders": {},
+        "active_folder": None,
+        "active_log_id": None,
+    }
+
+
+def load_projects_state():
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    if not STORAGE_FILE.exists():
+        return _default_persistent_state()
+
+    try:
+        with STORAGE_FILE.open("rb") as handle:
+            data = pickle.load(handle)
+        if not isinstance(data, dict):
+            return _default_persistent_state()
+        data.setdefault("folders", {})
+        data.setdefault("active_folder", None)
+        data.setdefault("active_log_id", None)
+        return data
+    except Exception:
+        return _default_persistent_state()
+
+
+def save_projects_state():
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "folders": st.session_state.get("analysis_log_folders", {}),
+        "active_folder": st.session_state.get("active_log_folder"),
+        "active_log_id": st.session_state.get("persistent_active_log_id"),
+    }
+    temp_file = STORAGE_FILE.with_suffix(".tmp")
+    try:
+        with temp_file.open("wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        temp_file.replace(STORAGE_FILE)
+    except Exception:
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception:
+                pass
+
+
 def initialize_log_state():
     if "analysis_log_folders" not in st.session_state:
-        st.session_state["analysis_log_folders"] = {}
+        saved = load_projects_state()
+        st.session_state["analysis_log_folders"] = saved["folders"]
+        st.session_state["active_log_folder"] = saved["active_folder"]
+        st.session_state["persistent_active_log_id"] = saved["active_log_id"]
+
     if "active_log_folder" not in st.session_state:
         st.session_state["active_log_folder"] = None
+    if "persistent_active_log_id" not in st.session_state:
+        st.session_state["persistent_active_log_id"] = None
 
 
 def create_log_folder(folder_name):
     name = str(folder_name).strip()
     if not name:
         return False, "폴더 이름을 입력하세요."
+
     folders = st.session_state["analysis_log_folders"]
     if name in folders:
-        return False, "같은 이름의 폴더가 이미 있습니다."
+        return False, "같은 이름의 프로젝트가 이미 있습니다."
+
     folders[name] = []
     st.session_state["active_log_folder"] = name
-    return True, f"'{name}' 폴더를 생성했습니다."
+    st.session_state["persistent_active_log_id"] = None
+    save_projects_state()
+    return True, f"'{name}' 프로젝트를 생성했습니다."
 
 
 def delete_log_entry(folder_name, entry_id):
     folders = st.session_state["analysis_log_folders"]
     if folder_name not in folders:
         return
+
     folders[folder_name] = [
         item for item in folders[folder_name]
         if item.get("_log_id") != entry_id
     ]
+
+    if st.session_state.get("persistent_active_log_id") == entry_id:
+        st.session_state["persistent_active_log_id"] = None
+        st.session_state.pop("active_file_bytes", None)
+        st.session_state.pop("active_file_name", None)
+
+    save_projects_state()
 
 
 def clear_log_folder(folder_name):
     folders = st.session_state["analysis_log_folders"]
     if folder_name in folders:
         folders[folder_name] = []
+        st.session_state["persistent_active_log_id"] = None
+        st.session_state.pop("active_file_bytes", None)
+        st.session_state.pop("active_file_name", None)
+        save_projects_state()
 
 
 def clear_all_logs():
     folders = st.session_state["analysis_log_folders"]
     for name in list(folders.keys()):
         folders[name] = []
+    st.session_state["persistent_active_log_id"] = None
+    st.session_state.pop("active_file_bytes", None)
+    st.session_state.pop("active_file_name", None)
+    save_projects_state()
 
 
 def sci(value, digits=2):
@@ -238,167 +316,32 @@ def safe_excel_filename(name):
 initialize_log_state()
 
 
-# ============================================================
-# Session log / folder helpers
-# ============================================================
-def initialize_log_state():
-    if "analysis_log_folders" not in st.session_state:
-        st.session_state["analysis_log_folders"] = {}
-    if "active_log_folder" not in st.session_state:
-        st.session_state["active_log_folder"] = None
-
-
-def create_log_folder(folder_name):
-    name = str(folder_name).strip()
-    if not name:
-        return False, "폴더 이름을 입력하세요."
-    folders = st.session_state["analysis_log_folders"]
-    if name in folders:
-        return False, "같은 이름의 폴더가 이미 있습니다."
-    folders[name] = []
-    st.session_state["active_log_folder"] = name
-    return True, f"'{name}' 폴더를 생성했습니다."
-
-
-def delete_log_entry(folder_name, entry_id):
-    folders = st.session_state["analysis_log_folders"]
-    if folder_name not in folders:
-        return
-    folders[folder_name] = [
-        item for item in folders[folder_name]
-        if item.get("_log_id") != entry_id
-    ]
-
-
-def clear_log_folder(folder_name):
-    folders = st.session_state["analysis_log_folders"]
-    if folder_name in folders:
-        folders[folder_name] = []
-
-
-def clear_all_logs():
-    folders = st.session_state["analysis_log_folders"]
-    for name in list(folders.keys()):
-        folders[name] = []
-
-
-EXPORT_COLUMNS = [
-    "File",
-    "Drain voltage",
-    "Linear or saturation",
-    "Gate voltage range",
-    "Gate voltage step",
-    "On current (A/um)",
-    "Off current (A/um)",
-    "on-off ratio",
-    "Field-effect mobility",
-    "threshold voltage (V)",
-    "subthreshold swing (mV/dec)",
-]
-
-
-def log_dataframe(folder_name):
-    folders = st.session_state["analysis_log_folders"]
-    records = folders.get(folder_name, [])
-    if not records:
-        return pd.DataFrame(columns=EXPORT_COLUMNS)
-
-    rows = []
-    for record in records:
-        rows.append({
-            "File": record.get("File", ""),
-            "Drain voltage": record.get("Drain voltage (V)", np.nan),
-            "Linear or saturation": record.get("Operating mode", ""),
-            "Gate voltage range": record.get("Gate voltage range", ""),
-            "Gate voltage step": record.get("Gate voltage step (V)", np.nan),
-            "On current (A/um)": sci_plain(
-                record.get("ON current / Width (A/μm)", np.nan)
-            ),
-            "Off current (A/um)": sci_plain(
-                record.get("OFF current / Width (A/μm)", np.nan)
-            ),
-            "on-off ratio": sci_plain(
-                record.get("ON/OFF ratio", np.nan)
-            ),
-            "Field-effect mobility": record.get(
-                "Forward mobility (cm²/V·s)", np.nan
-            ),
-            "threshold voltage (V)": record.get(
-                "Forward Vth (V)", np.nan
-            ),
-            "subthreshold swing (mV/dec)": record.get(
-                "Forward SS (mV/dec)", np.nan
-            ),
-        })
-
-    return pd.DataFrame(rows, columns=EXPORT_COLUMNS)
-
-
-def autosize_worksheet(ws):
-    """Adjust each column width based on cell content."""
-    for column_cells in ws.columns:
-        max_length = 0
-        column_letter = get_column_letter(column_cells[0].column)
-
-        for cell in column_cells:
-            value = "" if cell.value is None else str(cell.value)
-            # multiline content: use longest line
-            length = max((len(line) for line in value.splitlines()), default=0)
-            max_length = max(max_length, length)
-
-        ws.column_dimensions[column_letter].width = min(max(max_length + 3, 12), 45)
-
-
-def style_parameter_sheet(ws):
-    """Light-green header row with readable alignment."""
-    header_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
-    header_font = Font(bold=True, color="006100")
-
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = ws.dimensions
-    autosize_worksheet(ws)
-
-
-def folder_excel_bytes(folder_name):
-    df = log_dataframe(folder_name)
-    output = io.BytesIO()
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Parameters", index=False)
-        ws = writer.book["Parameters"]
-        style_parameter_sheet(ws)
-
-    output.seek(0)
-    return output.getvalue()
-
-
-def safe_excel_filename(name):
-    safe = re.sub(r'[\\/:*?"<>|]+', "_", str(name)).strip()
-    return safe or "FET_Analysis_Log"
-
-
-initialize_log_state()
-
-
 def restore_log_state(record):
-    """
-    Restore the saved analysis state.
-    File bytes cannot be persisted in session_state across app restarts,
-    but within the current session the uploaded file bytes are stored in the log.
-    """
+    """Restore the uploaded file and every saved analysis selection."""
+    file_bytes = record.get("_file_bytes")
+    if not file_bytes:
+        st.session_state["restore_error"] = "저장된 원본 파일 데이터가 없습니다."
+        return
+
     st.session_state["restored_log_id"] = record.get("_log_id")
-    st.session_state["restored_file_name"] = record.get("File", "")
-    st.session_state["restored_file_bytes"] = record.get("_file_bytes")
+    st.session_state["persistent_active_log_id"] = record.get("_log_id")
+    st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
+    st.session_state["active_file_bytes"] = file_bytes
+    st.session_state["restored_file_name"] = record.get("File", "restored.xlsx")
+    st.session_state["restored_file_bytes"] = file_bytes
     st.session_state["restored_sheet"] = record.get("Sheet")
-    st.session_state["restored_operating_mode"] = record.get("Operating mode")
-    st.session_state["restored_W"] = record.get("Width (μm)")
-    st.session_state["restored_L"] = record.get("Length (μm)")
-    st.session_state["restored_Cox_nf"] = record.get("Cox (nF/cm²)")
+
+    mode = record.get("Operating mode")
+    if mode in ["Linear", "Saturation"]:
+        st.session_state["operating_mode_widget"] = mode
+
+    if record.get("Width (μm)") is not None:
+        st.session_state["width_widget"] = float(record["Width (μm)"])
+    if record.get("Length (μm)") is not None:
+        st.session_state["length_widget"] = float(record["Length (μm)"])
+    if record.get("Cox (nF/cm²)") is not None:
+        st.session_state["cox_widget"] = float(record["Cox (nF/cm²)"])
+
     st.session_state["restored_peak_vg_fwd"] = record.get("Forward peak Vg (V)")
     st.session_state["restored_peak_vg_bwd"] = record.get("Backward peak Vg (V)")
     st.session_state["restored_current_vg_fwd"] = record.get("Selected Forward Vg (V)")
@@ -406,6 +349,23 @@ def restore_log_state(record):
     st.session_state["restored_removed_fwd"] = record.get("_removed_fwd_indices", [])
     st.session_state["restored_removed_bwd"] = record.get("_removed_bwd_indices", [])
     st.session_state["restore_pending"] = True
+    save_projects_state()
+
+
+def auto_restore_last_log():
+    """After a browser refresh, automatically reopen the last active saved log."""
+    if st.session_state.get("active_file_bytes"):
+        return
+
+    active_id = st.session_state.get("persistent_active_log_id")
+    if not active_id:
+        return
+
+    for records in st.session_state.get("analysis_log_folders", {}).values():
+        for record in records:
+            if record.get("_log_id") == active_id:
+                restore_log_state(record)
+                return
 
 
 def consume_restore_value(key, default=None):
@@ -434,6 +394,9 @@ L = float(st.session_state["length_widget"])
 Cox_nf = float(st.session_state["cox_widget"])
 Cox = Cox_nf * 1e-9
 
+
+initialize_log_state()
+auto_restore_last_log()
 
 # ============================================================
 # Sidebar: Project manager
@@ -474,6 +437,7 @@ if project_names:
     )
     active_project = project_names[project_display_names.index(selected_display)]
     st.session_state["active_log_folder"] = active_project
+    save_projects_state()
 
     active_logs = st.session_state["analysis_log_folders"][active_project]
     st.sidebar.caption(f"Selected: {active_project} · {len(active_logs)} logs")
@@ -528,6 +492,10 @@ if project_names:
     ):
         del st.session_state["analysis_log_folders"][active_project]
         st.session_state["active_log_folder"] = None
+        st.session_state["persistent_active_log_id"] = None
+        st.session_state.pop("active_file_bytes", None)
+        st.session_state.pop("active_file_name", None)
+        save_projects_state()
         st.rerun()
 else:
     active_project = None
@@ -567,9 +535,11 @@ def fix_inf(values):
 
 def make_card(title, value, color):
     return f"""
-    <div style='text-align:left; padding:5px 0;'>
-        <p style='font-size:20px; margin-bottom:5px; color:#555;'>{title}</p>
-        <p style='font-size:26px; font-weight:bold; color:{color}; margin:0; line-height:1.2;'>{value}</p>
+    <div style='text-align:left; padding:3px 0; min-width:0;'>
+        <p style='font-size:15px; margin-bottom:3px; color:#555;
+                  line-height:1.15; white-space:nowrap;'>{title}</p>
+        <p style='font-size:20px; font-weight:bold; color:{color};
+                  margin:0; line-height:1.15; white-space:nowrap;'>{value}</p>
     </div>
     """
 
@@ -952,6 +922,9 @@ def render_discrete_vg_control(
 
 main_col, device_col = st.columns([4.4, 1.6], gap="large")
 
+if st.session_state.get("restore_error"):
+    st.error(st.session_state.pop("restore_error"))
+
 with main_col:
     uploaded_file = st.file_uploader(
         "측정된 엑셀 파일을 업로드하세요",
@@ -997,10 +970,23 @@ with device_col:
 
     right_controls = st.container()
 
-# Saved log clicked: reconstruct the uploaded file in-memory
-if st.session_state.get("restore_pending") and st.session_state.get("restored_file_bytes"):
-    restored_buffer = io.BytesIO(st.session_state["restored_file_bytes"])
-    restored_buffer.name = st.session_state.get("restored_file_name", "restored.xlsx")
+# Keep the current file active after a log is clicked and across normal reruns.
+if uploaded_file is not None:
+    try:
+        uploaded_file.seek(0)
+        current_file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
+        st.session_state["active_file_bytes"] = current_file_bytes
+        st.session_state["active_file_name"] = getattr(
+            uploaded_file, "name", "uploaded.xlsx"
+        )
+    except Exception:
+        pass
+elif st.session_state.get("active_file_bytes"):
+    restored_buffer = io.BytesIO(st.session_state["active_file_bytes"])
+    restored_buffer.name = st.session_state.get(
+        "active_file_name", "restored.xlsx"
+    )
     uploaded_file = restored_buffer
 
 with main_content:
@@ -1416,6 +1402,10 @@ with main_content:
                     }
                     st.session_state["analysis_log_folders"][current_project].append(log_entry)
                     st.session_state["active_log_folder"] = current_project
+                    st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
+                    st.session_state["active_file_bytes"] = saved_file_bytes
+                    st.session_state["active_file_name"] = uploaded_file.name
+                    save_projects_state()
                     parameter_panel.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
                     st.rerun()
 
