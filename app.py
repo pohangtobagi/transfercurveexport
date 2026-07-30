@@ -44,109 +44,6 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
     padding-bottom: 0.35rem !important;
 }
 
-/* Right-side device information panel */
-.device-panel {
-    border: 1px solid rgba(128, 128, 128, 0.35);
-    border-radius: 12px;
-    padding: 3px 7px 2px 7px;
-    margin-bottom: 2px;
-    background: rgba(128, 128, 128, 0.06);
-}
-.device-panel-title {
-    font-size: 13px;
-    font-weight: 750;
-    margin-bottom: 2px;
-}
-.device-panel-caption {
-    font-size: 9px;
-    color: #777;
-    margin-bottom: 1px;
-}
-
-/* Ultra-compact right control panel */
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0.22rem 0.32rem 0.30rem 0.32rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] h2,
-div[data-testid="stVerticalBlockBorderWrapper"] h3 {
-    font-size: 11px !important;
-    line-height: 1.0 !important;
-    margin: 0.02rem 0 0.05rem 0 !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] p,
-div[data-testid="stVerticalBlockBorderWrapper"] label p {
-    font-size: 9px !important;
-    line-height: 1.0 !important;
-    margin-bottom: 0 !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stCaptionContainer"] {
-    margin-top: -0.34rem !important;
-    margin-bottom: -0.34rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSlider"] {
-    margin-top: -0.68rem !important;
-    margin-bottom: -0.88rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] {
-    margin-top: -0.34rem !important;
-    margin-bottom: -0.40rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button {
-    min-height: 22px !important;
-    height: 22px !important;
-    padding: 0 0.20rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button p {
-    font-size: 9px !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] hr {
-    margin: 0.10rem 0 !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] {
-    margin-top: -0.42rem !important;
-    margin-bottom: -0.48rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] label {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-}
-
-/* Compact Device Information widgets */
-div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
-> div[data-testid="stColumn"]:nth-child(2)
-div[data-testid="stNumberInput"] {
-    margin-top: -0.34rem !important;
-    margin-bottom: -0.48rem !important;
-}
-div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
-> div[data-testid="stColumn"]:nth-child(2)
-div[data-testid="stNumberInput"] input {
-    min-height: 27px !important;
-    height: 27px !important;
-    padding-top: 0.08rem !important;
-    padding-bottom: 0.08rem !important;
-    font-size: 10px !important;
-}
-div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
-> div[data-testid="stColumn"]:nth-child(2)
-label p {
-    font-size: 9px !important;
-    line-height: 1.0 !important;
-}
-div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
-> div[data-testid="stColumn"]:nth-child(2)
-[data-testid="stRadio"] {
-    margin-top: -0.28rem !important;
-    margin-bottom: -0.42rem !important;
-}
-/* Lift only the top-right Device Information / Analysis Controls column */
-div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
-> div[data-testid="stColumn"]:nth-child(2) {
-    transform: translateY(-155px);
-    position: relative;
-    z-index: 2;
-}
-
 /* Compact sidebar controls and saved-log rows */
 section[data-testid="stSidebar"] div[data-testid="stButton"] {
     margin-top: -0.18rem !important;
@@ -521,6 +418,37 @@ auto_restore_last_log()
 # Sidebar: Project manager
 # ============================================================
 initialize_log_state()
+
+st.sidebar.markdown(
+    "<div style='font-size:15px; font-weight:750; margin:0 0 3px 0;'>"
+    "Device Information</div>",
+    unsafe_allow_html=True,
+)
+operating_mode = st.sidebar.radio(
+    "Operating Mode",
+    ["Linear", "Saturation"],
+    key="operating_mode_widget",
+    horizontal=True,
+)
+W = st.sidebar.number_input(
+    "Width (μm)",
+    min_value=0.000001,
+    step=50.0,
+    key="width_widget",
+)
+L = st.sidebar.number_input(
+    "Length (μm)",
+    min_value=0.000001,
+    step=50.0,
+    key="length_widget",
+)
+Cox_nf = st.sidebar.number_input(
+    "Capacitance (nF/cm⁻²)",
+    min_value=0.000001,
+    key="cox_widget",
+)
+Cox = Cox_nf * 1e-9
+st.sidebar.markdown("---")
 
 st.sidebar.header("Projects")
 st.sidebar.caption("프로젝트를 생성하거나 선택한 뒤 분석을 진행하세요.")
@@ -1064,60 +992,14 @@ def render_discrete_vg_control(
 # Upload
 # ============================================================
 
-main_col, device_col = st.columns([4.4, 1.6], gap="large")
-
 if st.session_state.get("restore_error"):
     st.error(st.session_state.pop("restore_error"))
 
-with main_col:
-    uploaded_file = st.file_uploader(
-        "측정된 엑셀 파일을 업로드하세요",
-        type=["xlsx", "xls"],
-    )
-    main_content = st.container()
-
-with device_col:
-    st.markdown(
-        '<div class="right-panel-anchor"></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        """
-        <div class="device-panel">
-            <div class="device-panel-title">Device Information</div>
-            <div class="device-panel-caption">현재 분석에 적용되는 소자 조건</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    operating_mode = st.radio(
-        "Operating Mode",
-        ["Linear", "Saturation"],
-        key="operating_mode_widget",
-        horizontal=True,
-    )
-    W = st.number_input(
-        "Width (μm)",
-        min_value=0.000001,
-        step=50.0,
-        key="width_widget",
-    )
-    L = st.number_input(
-        "Length (μm)",
-        min_value=0.000001,
-        step=50.0,
-        key="length_widget",
-    )
-    Cox_nf = st.number_input(
-        "Capacitance (nF/cm⁻²)",
-        min_value=0.000001,
-        key="cox_widget",
-    )
-    Cox = Cox_nf * 1e-9
-
-    # Compact control panel; no internal scrollbar.
-    right_controls = st.container(border=True)
+uploaded_file = st.file_uploader(
+    "측정된 엑셀 파일을 업로드하세요",
+    type=["xlsx", "xls"],
+)
+main_content = st.container()
 
 # Keep the current file active after a log is clicked and across normal reruns.
 if uploaded_file is not None:
@@ -1344,117 +1226,12 @@ with main_content:
             removed_b_count = len(st.session_state[keys["removed_bwd"]])
 
             # ====================================================
-            # Parameters on top
             # ====================================================
-            header_col, project_col, add_col, undo_col = st.columns(
-                [3.5, 2.2, 1.45, 0.75], gap="small"
-            )
-            header_col.markdown(
-                f"<h3 style='color:#333; margin:2px 0 0 0;'>"
+            # Data title
+            # ====================================================
+            st.markdown(
+                f"<h3 style='color:#333; margin:2px 0 6px 0;'>"
                 f"📊 {selected_sheet} ({operating_mode})</h3>",
-                unsafe_allow_html=True,
-            )
-
-            current_project = st.session_state.get("active_log_folder")
-            project_col.markdown(
-                f"<div style='font-size:13px; padding-top:8px;'>"
-                f"Project: <b>{current_project or 'None'}</b></div>",
-                unsafe_allow_html=True,
-            )
-
-            if add_col.button(
-                "Add to Project",
-                use_container_width=True,
-                disabled=current_project is None,
-            ):
-                # Store file bytes and exact analysis selections for click-to-restore.
-                try:
-                    uploaded_file.seek(0)
-                    saved_file_bytes = uploaded_file.read()
-                    uploaded_file.seek(0)
-                except Exception:
-                    saved_file_bytes = None
-
-                log_entry = {
-                    "_log_id": str(uuid.uuid4()),
-                    "_file_bytes": saved_file_bytes,
-                    "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
-                    "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
-                    "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "File": uploaded_file.name,
-                    "Sheet": selected_sheet,
-                    "Operating mode": operating_mode,
-                    "Width (μm)": float(W),
-                    "Length (μm)": float(L),
-                    "Cox (nF/cm²)": float(Cox_nf),
-                    "Drain voltage (V)": float(res["vd"]),
-                    "Gate voltage range": (
-                        f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
-                        f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
-                    ),
-                    "Gate voltage step (V)": float(
-                        np.median(np.abs(np.diff(fwd["GateV"])))
-                    ) if len(fwd) > 1 else np.nan,
-                    "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
-                    "Forward Vth (V)": float(params["vth_fwd"]),
-                    "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
-                    "Forward SS (mV/dec)": float(params["ss_fwd"]),
-                    "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
-                    "Backward Vth (V)": float(params["vth_bwd"]),
-                    "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
-                    "Backward SS (mV/dec)": float(params["ss_bwd"]),
-                    "Hysteresis (V)": float(params["hysteresis"]),
-                    "ON/OFF ratio": float(params["onoff"]),
-                    "ON current / Width (A/μm)": float(params["on_density"]),
-                    "OFF current / Width (A/μm)": float(params["off_density"]),
-                    "Selected Forward Vg (V)": float(current_f_row["GateV"]),
-                    "Selected Forward |Id| / W (A/μm)": float(current_f_density),
-                    "Selected Backward Vg (V)": float(current_b_row["GateV"]),
-                    "Selected Backward |Id| / W (A/μm)": float(current_b_density),
-                    "Removed Forward points": int(removed_f_count),
-                    "Removed Backward points": int(removed_b_count),
-                }
-                st.session_state["analysis_log_folders"][current_project].append(log_entry)
-                st.session_state["active_log_folder"] = current_project
-                st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
-                st.session_state["active_file_bytes"] = saved_file_bytes
-                st.session_state["active_file_name"] = uploaded_file.name
-                save_projects_state()
-                header_col.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
-                st.rerun()
-
-            if undo_col.button(
-                "↶",
-                key=f"undo_project_{file_id}_{selected_sheet}_{operating_mode}",
-                help="이전 저장 상태로 되돌리기",
-                use_container_width=True,
-                disabled=current_project is None,
-            ):
-                records = st.session_state["analysis_log_folders"].get(
-                    current_project, []
-                )
-                current_id = st.session_state.get("persistent_active_log_id")
-                target_record = None
-                if records:
-                    current_index = next(
-                        (
-                            i for i, record in enumerate(records)
-                            if record.get("_log_id") == current_id
-                        ),
-                        len(records),
-                    )
-                    if current_index > 0:
-                        target_record = records[current_index - 1]
-                    elif len(records) > 1:
-                        target_record = records[-2]
-                if target_record is not None:
-                    restore_log_state(target_record)
-                    st.rerun()
-
-            # Overall parameters first, with sweep selector at right
-            overall_title_col, parameter_toggle_col = st.columns([4.2, 1.8])
-            overall_title_col.markdown(
-                "<h4 style='margin:8px 0 3px 0;'>Overall Data Parameters</h4>",
                 unsafe_allow_html=True,
             )
 
@@ -1464,157 +1241,269 @@ with main_content:
             if parameter_direction_key not in st.session_state:
                 st.session_state[parameter_direction_key] = "Forward"
 
-            parameter_direction = parameter_toggle_col.radio(
-                "Parameter sweep",
+            overall_col, direction_col = st.columns([1, 1], gap="large")
+
+            with overall_col:
+                st.markdown(
+                    "<h4 style='margin:2px 0 3px 0;'>Overall Data Parameters</h4>",
+                    unsafe_allow_html=True,
+                )
+                o1, o2 = st.columns(2)
+                o1.markdown(
+                    make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
+                    unsafe_allow_html=True,
+                )
+                o2.markdown(
+                    make_card(
+                        "ON Current / Width (A/μm)",
+                        sci(params["on_density"]),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                o3, o4 = st.columns(2)
+                o3.markdown(
+                    make_card(
+                        "OFF Current / Width (A/μm)",
+                        sci(params["off_density"]),
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                o4.markdown(
+                    make_card(
+                        "Hysteresis (V)",
+                        f"{params['hysteresis']:.2f}",
+                        "#5B5F97",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            with direction_col:
+                title_col, toggle_col = st.columns([1.4, 1.2])
+                parameter_direction = toggle_col.radio(
+                    "Parameter sweep",
+                    ["Forward", "Reverse"],
+                    key=parameter_direction_key,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+                show_forward = parameter_direction == "Forward"
+                title_color = "#6FADCF" if show_forward else "#F05650"
+                title_col.markdown(
+                    f"<h4 style='color:{title_color}; margin:2px 0 3px 0;'>"
+                    f"{parameter_direction} Parameters</h4>",
+                    unsafe_allow_html=True,
+                )
+
+                if show_forward:
+                    mu_value = params["mu_fwd"]
+                    vth_value = params["vth_fwd"]
+                    peak_value = params["peak_vg_fwd"]
+                    ss_value = params["ss_fwd"]
+                else:
+                    mu_value = params["mu_bwd"]
+                    vth_value = params["vth_bwd"]
+                    peak_value = params["peak_vg_bwd"]
+                    ss_value = params["ss_bwd"]
+
+                p1, p2 = st.columns(2)
+                p1.markdown(
+                    make_card(
+                        "Peak Mobility (cm²/V·s)",
+                        f"{mu_value:.2f}",
+                        "#2E60AB",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p2.markdown(
+                    make_card(
+                        "Threshold Voltage, Vₜₕ (V)",
+                        f"{vth_value:.2f}",
+                        "#A23B72",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p3, p4 = st.columns(2)
+                p3.markdown(
+                    make_card(
+                        "Peak Point, Vg (V)",
+                        f"{peak_value:.1f}",
+                        "#F18F01",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p4.markdown(
+                    make_card(
+                        "SS (mV/dec)",
+                        f"{ss_value:.1f}",
+                        "#18A558",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            # ====================================================
+            # Original-style point controls
+            # ====================================================
+            control_direction_key = (
+                f"control_direction_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            if control_direction_key not in st.session_state:
+                st.session_state[control_direction_key] = "Forward"
+
+            control_direction = st.radio(
+                "Control direction",
                 ["Forward", "Reverse"],
-                key=parameter_direction_key,
+                key=control_direction_key,
                 horizontal=True,
-                label_visibility="collapsed",
             )
-            show_forward = parameter_direction == "Forward"
-
-            o1, o2, o3, o4 = st.columns(4)
-            o1.markdown(
-                make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
-                unsafe_allow_html=True,
-            )
-            o2.markdown(
-                make_card(
-                    "ON Current / Width (A/μm)",
-                    sci(params["on_density"]),
-                    "#5B5F97",
-                ),
-                unsafe_allow_html=True,
-            )
-            o3.markdown(
-                make_card(
-                    "OFF Current / Width (A/μm)",
-                    sci(params["off_density"]),
-                    "#5B5F97",
-                ),
-                unsafe_allow_html=True,
-            )
-            o4.markdown(
-                make_card(
-                    "Hysteresis (V)",
-                    f"{params['hysteresis']:.2f}",
-                    "#5B5F97",
-                ),
-                unsafe_allow_html=True,
+            control_forward = control_direction == "Forward"
+            control_short = "Fwd" if control_forward else "Rev"
+            control_df = fwd if control_forward else bwd
+            control_auto_idx = (
+                res["auto_idx_f"] if control_forward else res["auto_idx_b"]
             )
 
-            # Current point selector directly below ON/OFF current cards
-            current_control_col, current_value_col = st.columns([3.5, 1.5])
-            current_df = fwd if show_forward else bwd
-            current_key = (
-                keys["current_slider_fwd"] if show_forward
-                else keys["current_slider_bwd"]
+            peak_control, removal_control, current_control = st.columns(
+                3, gap="large"
             )
-            current_short = "Fwd" if show_forward else "Rev"
-            current_vg = render_discrete_vg_control(
-                title="",
-                slider_label="Current Vg",
-                state_key=current_key,
-                active_df=current_df,
-                default_value=float(current_df["GateV"].iloc[0]),
-                button_prefix=(
-                    f"current_inline_{current_short}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
-                ),
-                parent=current_control_col,
-            )
-            if show_forward:
-                current_f_idx, current_f_row, current_f_density = current_density_at_vg(
-                    fwd, current_vg, W
+
+            # Mobility maximum point
+            with peak_control:
+                st.markdown("**Mobility Peak Point**")
+                peak_key = (
+                    keys["peak_slider_fwd"] if control_forward
+                    else keys["peak_slider_bwd"]
                 )
-                active_current_density = current_f_density
-            else:
-                current_b_idx, current_b_row, current_b_density = current_density_at_vg(
-                    bwd, current_vg, W
+                peak_vg = render_discrete_vg_control(
+                    title="",
+                    slider_label=f"{control_direction} peak Vg",
+                    state_key=peak_key,
+                    active_df=control_df,
+                    default_value=float(
+                        control_df["GateV"].iloc[control_auto_idx]
+                    ),
+                    button_prefix=(
+                        f"peak_original_{control_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=peak_control,
                 )
-                active_current_density = current_b_density
-            current_value_col.caption(
-                f"{current_short} |Id|/W = "
-                f"{sci_plain(active_current_density)} A/μm"
+                force_key = (
+                    keys["force_auto_peak_fwd"] if control_forward
+                    else keys["force_auto_peak_bwd"]
+                )
+                if st.button(
+                    "Auto Max",
+                    key=(
+                        f"auto_original_{control_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    use_container_width=True,
+                ):
+                    st.session_state[force_key] = True
+                    st.rerun()
+
+            # Peak elimination / manual removal
+            with removal_control:
+                st.markdown("**Peak Elimination**")
+                removal_key = (
+                    keys["remove_slider_fwd"] if control_forward
+                    else keys["remove_slider_bwd"]
+                )
+                removal_vg = render_discrete_vg_control(
+                    title="",
+                    slider_label=f"{control_direction} removal Vg",
+                    state_key=removal_key,
+                    active_df=control_df,
+                    default_value=float(
+                        control_df["GateV"].iloc[control_auto_idx]
+                    ),
+                    button_prefix=(
+                        f"remove_original_{control_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=removal_control,
+                )
+                removal_idx, removal_row = nearest_row_by_vg(
+                    control_df, removal_vg
+                )
+                removed_key = (
+                    keys["removed_fwd"] if control_forward
+                    else keys["removed_bwd"]
+                )
+                remove_col, reset_col = st.columns(2)
+                if remove_col.button(
+                    "Remove",
+                    key=(
+                        f"remove_btn_original_{control_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    use_container_width=True,
+                ):
+                    source_idx = int(removal_row["__source_index"])
+                    removed = list(st.session_state[removed_key])
+                    if source_idx not in removed:
+                        removed.append(source_idx)
+                        st.session_state[removed_key] = removed
+                    st.session_state[force_key] = True
+                    st.rerun()
+
+                if reset_col.button(
+                    "Reset",
+                    key=(
+                        f"reset_btn_original_{control_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    use_container_width=True,
+                ):
+                    st.session_state[removed_key] = []
+                    st.session_state[force_key] = True
+                    st.rerun()
+
+            # Current-density point
+            with current_control:
+                st.markdown("**Transfer Current Point**")
+                current_key = (
+                    keys["current_slider_fwd"] if control_forward
+                    else keys["current_slider_bwd"]
+                )
+                current_vg = render_discrete_vg_control(
+                    title="",
+                    slider_label=f"{control_direction} current Vg",
+                    state_key=current_key,
+                    active_df=control_df,
+                    default_value=float(control_df["GateV"].iloc[0]),
+                    button_prefix=(
+                        f"current_original_{control_short}_{file_id}_"
+                        f"{selected_sheet}_{operating_mode}"
+                    ),
+                    parent=current_control,
+                )
+                if control_forward:
+                    current_f_idx, current_f_row, current_f_density = (
+                        current_density_at_vg(fwd, current_vg, W)
+                    )
+                    active_density = current_f_density
+                else:
+                    current_b_idx, current_b_row, current_b_density = (
+                        current_density_at_vg(bwd, current_vg, W)
+                    )
+                    active_density = current_b_density
+                st.caption(
+                    f"|Id|/W = {sci_plain(active_density)} A/μm"
+                )
+
+            # Refresh current values for plotting after control interactions
+            current_f_vg = float(st.session_state[keys["current_slider_fwd"]])
+            current_b_vg = float(st.session_state[keys["current_slider_bwd"]])
+            current_f_idx, current_f_row, current_f_density = current_density_at_vg(
+                fwd, current_f_vg, W
+            )
+            current_b_idx, current_b_row, current_b_density = current_density_at_vg(
+                bwd, current_b_vg, W
             )
 
-            # Selected direction parameters
-            direction_color = "#6FADCF" if show_forward else "#F05650"
-            st.markdown(
-                f"<h4 style='color:{direction_color}; margin:5px 0 2px 0;'>"
-                f"{parameter_direction} Parameters</h4>",
-                unsafe_allow_html=True,
-            )
-
-            if show_forward:
-                mu_value = params["mu_fwd"]
-                vth_value = params["vth_fwd"]
-                peak_value = params["peak_vg_fwd"]
-                ss_value = params["ss_fwd"]
-                peak_df = fwd
-                peak_key = keys["peak_slider_fwd"]
-                auto_idx = res["auto_idx_f"]
-                force_key = keys["force_auto_peak_fwd"]
-                short_name = "Fwd"
-            else:
-                mu_value = params["mu_bwd"]
-                vth_value = params["vth_bwd"]
-                peak_value = params["peak_vg_bwd"]
-                ss_value = params["ss_bwd"]
-                peak_df = bwd
-                peak_key = keys["peak_slider_bwd"]
-                auto_idx = res["auto_idx_b"]
-                force_key = keys["force_auto_peak_bwd"]
-                short_name = "Rev"
-
-            p1, p2, p3, p4 = st.columns(4)
-            p1.markdown(
-                make_card("Peak Mobility (cm²/V·s)", f"{mu_value:.2f}", "#2E60AB"),
-                unsafe_allow_html=True,
-            )
-            p2.markdown(
-                make_card(
-                    "Threshold Voltage, Vₜₕ (V)",
-                    f"{vth_value:.2f}",
-                    "#A23B72",
-                ),
-                unsafe_allow_html=True,
-            )
-            p3.markdown(
-                make_card("Peak Point, Vg (V)", f"{peak_value:.1f}", "#F18F01"),
-                unsafe_allow_html=True,
-            )
-            p4.markdown(
-                make_card("SS (mV/dec)", f"{ss_value:.1f}", "#18A558"),
-                unsafe_allow_html=True,
-            )
-
-            # Peak selector directly below mobility parameter
-            peak_control_col, auto_peak_col = st.columns([4.2, 1.1])
-            selected_peak_vg = render_discrete_vg_control(
-                title="",
-                slider_label="Peak Vg",
-                state_key=peak_key,
-                active_df=peak_df,
-                default_value=float(peak_df["GateV"].iloc[auto_idx]),
-                button_prefix=(
-                    f"peak_inline_{short_name}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
-                ),
-                parent=peak_control_col,
-            )
-            if auto_peak_col.button(
-                "Auto Max",
-                key=(
-                    f"auto_inline_{short_name}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
-                ),
-                use_container_width=True,
-            ):
-                st.session_state[force_key] = True
-                st.rerun()
-
-            # Recalculate selected peak immediately
             peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
             peak_b_vg = float(st.session_state[keys["peak_slider_bwd"]])
             idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
@@ -1627,7 +1516,6 @@ with main_content:
                 operating_mode, W,
             )
 
-            # ====================================================
             # Three plots in one horizontal row
             # ====================================================
             graph_mobility_title = (
@@ -1796,91 +1684,3 @@ with main_content:
                 legend=dict(orientation="h", y=1.13, x=0),
             )
             st.plotly_chart(fig, use_container_width=True)
-
-            # Peak elimination below plots
-            removal_direction_key = (
-                f"removal_direction_{file_id}_{selected_sheet}_{operating_mode}"
-            )
-            if removal_direction_key not in st.session_state:
-                st.session_state[removal_direction_key] = "Forward"
-
-            removal_header_col, removal_toggle_col = st.columns([4.2, 1.8])
-            removal_header_col.markdown(
-                "<div style='font-size:13px; font-weight:700;'>Peak Elimination</div>",
-                unsafe_allow_html=True,
-            )
-            removal_direction = removal_toggle_col.radio(
-                "Removal sweep",
-                ["Forward", "Reverse"],
-                key=removal_direction_key,
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-
-            remove_forward = removal_direction == "Forward"
-            removal_df = fwd if remove_forward else bwd
-            removal_key = (
-                keys["remove_slider_fwd"] if remove_forward
-                else keys["remove_slider_bwd"]
-            )
-            removed_key = (
-                keys["removed_fwd"] if remove_forward
-                else keys["removed_bwd"]
-            )
-            removal_force_key = (
-                keys["force_auto_peak_fwd"] if remove_forward
-                else keys["force_auto_peak_bwd"]
-            )
-            removal_short = "Fwd" if remove_forward else "Rev"
-            removal_auto_idx = (
-                res["auto_idx_f"] if remove_forward else res["auto_idx_b"]
-            )
-
-            removal_slider_col, remove_button_col, reset_button_col = st.columns(
-                [4.0, 1.0, 1.0]
-            )
-            removal_vg = render_discrete_vg_control(
-                title="",
-                slider_label="Removal Vg",
-                state_key=removal_key,
-                active_df=removal_df,
-                default_value=float(
-                    removal_df["GateV"].iloc[removal_auto_idx]
-                ),
-                button_prefix=(
-                    f"remove_below_{removal_short}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
-                ),
-                parent=removal_slider_col,
-            )
-            removal_idx, removal_row = nearest_row_by_vg(
-                removal_df, removal_vg
-            )
-
-            if remove_button_col.button(
-                "Remove",
-                key=(
-                    f"remove_action_{removal_short}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
-                ),
-                use_container_width=True,
-            ):
-                source_idx = int(removal_row["__source_index"])
-                removed = list(st.session_state[removed_key])
-                if source_idx not in removed:
-                    removed.append(source_idx)
-                    st.session_state[removed_key] = removed
-                st.session_state[removal_force_key] = True
-                st.rerun()
-
-            if reset_button_col.button(
-                "Reset",
-                key=(
-                    f"reset_action_{removal_short}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
-                ),
-                use_container_width=True,
-            ):
-                st.session_state[removed_key] = []
-                st.session_state[removal_force_key] = True
-                st.rerun()
