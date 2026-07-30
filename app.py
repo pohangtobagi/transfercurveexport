@@ -48,12 +48,12 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
 .device-panel {
     border: 1px solid rgba(128, 128, 128, 0.35);
     border-radius: 12px;
-    padding: 4px 8px 2px 8px;
+    padding: 3px 7px 2px 7px;
     margin-bottom: 2px;
     background: rgba(128, 128, 128, 0.06);
 }
 .device-panel-title {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 750;
     margin-bottom: 2px;
 }
@@ -142,7 +142,7 @@ div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
 /* Lift only the top-right Device Information / Analysis Controls column */
 div[data-testid="stHorizontalBlock"]:has(.right-panel-anchor)
 > div[data-testid="stColumn"]:nth-child(2) {
-    transform: translateY(-138px);
+    transform: translateY(-155px);
     position: relative;
     z-index: 2;
 }
@@ -175,6 +175,11 @@ section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] {
 section[data-testid="stSidebar"] hr {
     margin-top: 0.45rem !important;
     margin-bottom: 0.45rem !important;
+}
+
+/* Compact top parameter and inline control rows */
+div[data-testid="stMainBlockContainer"] div[data-testid="stButton"] button {
+    min-height: 30px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1231,6 +1236,40 @@ with main_content:
                 st.error("GateV, DrainI, DrainV 컬럼이 필요합니다.")
                 st.stop()
 
+            # Apply saved state before analysis so removed points and selected peaks
+            # are reflected immediately in the reconstructed curves.
+            pre_keys = state_keys(file_id, selected_sheet, operating_mode)
+            initialize_removal_state(pre_keys)
+
+            if st.session_state.get("restore_pending"):
+                st.session_state[pre_keys["removed_fwd"]] = list(
+                    st.session_state.get("restored_removed_fwd", [])
+                )
+                st.session_state[pre_keys["removed_bwd"]] = list(
+                    st.session_state.get("restored_removed_bwd", [])
+                )
+                st.session_state[pre_keys["force_auto_peak_fwd"]] = False
+                st.session_state[pre_keys["force_auto_peak_bwd"]] = False
+
+                if st.session_state.get("restored_peak_vg_fwd") is not None:
+                    st.session_state[pre_keys["peak_slider_fwd"]] = float(
+                        st.session_state["restored_peak_vg_fwd"]
+                    )
+                if st.session_state.get("restored_peak_vg_bwd") is not None:
+                    st.session_state[pre_keys["peak_slider_bwd"]] = float(
+                        st.session_state["restored_peak_vg_bwd"]
+                    )
+                if st.session_state.get("restored_current_vg_fwd") is not None:
+                    st.session_state[pre_keys["current_slider_fwd"]] = float(
+                        st.session_state["restored_current_vg_fwd"]
+                    )
+                if st.session_state.get("restored_current_vg_bwd") is not None:
+                    st.session_state[pre_keys["current_slider_bwd"]] = float(
+                        st.session_state["restored_current_vg_bwd"]
+                    )
+
+                st.session_state["restore_pending"] = False
+
             try:
                 res = analyze_sheet(df, file_id, selected_sheet)
             except Exception as exc:
@@ -1241,106 +1280,35 @@ with main_content:
             fwd = res["fwd"]
             bwd = res["bwd"]
 
-            # Apply saved log state once, then rerun with restored selections.
-            if st.session_state.get("restore_pending"):
-                st.session_state[keys["removed_fwd"]] = list(
-                    st.session_state.get("restored_removed_fwd", [])
-                )
-                st.session_state[keys["removed_bwd"]] = list(
-                    st.session_state.get("restored_removed_bwd", [])
-                )
-
-                if st.session_state.get("restored_peak_vg_fwd") is not None:
-                    st.session_state[keys["peak_slider_fwd"]] = float(
-                        st.session_state["restored_peak_vg_fwd"]
-                    )
-                if st.session_state.get("restored_peak_vg_bwd") is not None:
-                    st.session_state[keys["peak_slider_bwd"]] = float(
-                        st.session_state["restored_peak_vg_bwd"]
-                    )
-                if st.session_state.get("restored_current_vg_fwd") is not None:
-                    st.session_state[keys["current_slider_fwd"]] = float(
-                        st.session_state["restored_current_vg_fwd"]
-                    )
-                if st.session_state.get("restored_current_vg_bwd") is not None:
-                    st.session_state[keys["current_slider_bwd"]] = float(
-                        st.session_state["restored_current_vg_bwd"]
-                    )
-
-                st.session_state["restore_pending"] = False
-                st.rerun()
-
             # ====================================================
             # ====================================================
-            # Compact direction-selective analysis controls
             # ====================================================
-            direction_key = f"control_direction_{file_id}_{selected_sheet}_{operating_mode}"
-            if direction_key not in st.session_state:
-                st.session_state[direction_key] = "Forward"
-
-            control_direction = right_controls.radio(
-                "Sweep direction",
-                ["Forward", "Reverse"],
-                key=direction_key,
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-            is_forward_control = control_direction == "Forward"
-
-            # Initialize all states so the hidden direction retains its values.
+            # Prepare analysis selections; widgets are rendered next to
+            # their corresponding parameter/plot sections below.
+            # ====================================================
             initialize_slider_in_range(
-                keys["peak_slider_fwd"],
-                fwd,
+                keys["peak_slider_fwd"], fwd,
                 float(fwd["GateV"].iloc[res["auto_idx_f"]]),
             )
             initialize_slider_in_range(
-                keys["peak_slider_bwd"],
-                bwd,
+                keys["peak_slider_bwd"], bwd,
                 float(bwd["GateV"].iloc[res["auto_idx_b"]]),
             )
             initialize_slider_in_range(
-                keys["remove_slider_fwd"],
-                fwd,
+                keys["remove_slider_fwd"], fwd,
                 float(fwd["GateV"].iloc[res["auto_idx_f"]]),
             )
             initialize_slider_in_range(
-                keys["remove_slider_bwd"],
-                bwd,
+                keys["remove_slider_bwd"], bwd,
                 float(bwd["GateV"].iloc[res["auto_idx_b"]]),
             )
             initialize_slider_in_range(
-                keys["current_slider_fwd"],
-                fwd,
+                keys["current_slider_fwd"], fwd,
                 float(fwd["GateV"].iloc[0]),
             )
             initialize_slider_in_range(
-                keys["current_slider_bwd"],
-                bwd,
+                keys["current_slider_bwd"], bwd,
                 float(bwd["GateV"].iloc[0]),
-            )
-
-            # ====================================================
-            # Mobility peak point
-            # ====================================================
-            right_controls.markdown("### Peak")
-            active_peak_df = fwd if is_forward_control else bwd
-            active_peak_key = (
-                keys["peak_slider_fwd"] if is_forward_control
-                else keys["peak_slider_bwd"]
-            )
-            active_auto_idx = res["auto_idx_f"] if is_forward_control else res["auto_idx_b"]
-            direction_short = "Fwd" if is_forward_control else "Rev"
-
-            active_peak_vg = render_discrete_vg_control(
-                title=f"{control_direction} peak Vg",
-                slider_label=f"{control_direction} peak Vg",
-                state_key=active_peak_key,
-                active_df=active_peak_df,
-                default_value=float(active_peak_df["GateV"].iloc[active_auto_idx]),
-                button_prefix=(
-                    f"peak_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}"
-                ),
-                parent=right_controls,
             )
 
             peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
@@ -1356,132 +1324,6 @@ with main_content:
                 operating_mode, W,
             )
 
-            active_mu = params["mu_fwd"] if is_forward_control else params["mu_bwd"]
-            right_controls.caption(
-                f"Vg {active_peak_vg:.2f} V · μ {active_mu:.3g} cm²/V·s"
-            )
-
-            if right_controls.button(
-                f"Auto Max {direction_short}",
-                key=f"auto_max_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}",
-                use_container_width=True,
-            ):
-                force_key = (
-                    keys["force_auto_peak_fwd"] if is_forward_control
-                    else keys["force_auto_peak_bwd"]
-                )
-                st.session_state[force_key] = True
-                st.rerun()
-
-            # ====================================================
-            # Manual mobility point removal
-            # ====================================================
-            right_controls.markdown("---")
-            right_controls.markdown("### Remove")
-
-            active_remove_df = fwd if is_forward_control else bwd
-            active_remove_key = (
-                keys["remove_slider_fwd"] if is_forward_control
-                else keys["remove_slider_bwd"]
-            )
-            active_remove_vg = render_discrete_vg_control(
-                title=f"{control_direction} removal Vg",
-                slider_label=f"{control_direction} removal Vg",
-                state_key=active_remove_key,
-                active_df=active_remove_df,
-                default_value=float(active_remove_df["GateV"].iloc[active_auto_idx]),
-                button_prefix=(
-                    f"remove_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}"
-                ),
-                parent=right_controls,
-            )
-
-            active_remove_idx, active_remove_row = nearest_row_by_vg(
-                active_remove_df, active_remove_vg
-            )
-            active_mu_array = res["mu_fwd"] if is_forward_control else res["mu_bwd"]
-            active_remove_mu = float(active_mu_array[active_remove_idx])
-            right_controls.caption(
-                f"Vg {active_remove_row['GateV']:.2f} V · "
-                f"μ {active_remove_mu:.3g} cm²/V·s"
-            )
-
-            remove_col, reset_col = right_controls.columns(2)
-            if remove_col.button(
-                f"Remove {direction_short}",
-                key=f"remove_btn_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}",
-                use_container_width=True,
-            ):
-                source_idx = int(active_remove_row["__source_index"])
-                removed_key = (
-                    keys["removed_fwd"] if is_forward_control
-                    else keys["removed_bwd"]
-                )
-                force_key = (
-                    keys["force_auto_peak_fwd"] if is_forward_control
-                    else keys["force_auto_peak_bwd"]
-                )
-                removed = list(st.session_state[removed_key])
-                if source_idx not in removed:
-                    removed.append(source_idx)
-                    st.session_state[removed_key] = removed
-                st.session_state[force_key] = True
-                st.rerun()
-
-            if reset_col.button(
-                f"Reset {direction_short}",
-                key=f"reset_btn_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}",
-                use_container_width=True,
-            ):
-                removed_key = (
-                    keys["removed_fwd"] if is_forward_control
-                    else keys["removed_bwd"]
-                )
-                force_key = (
-                    keys["force_auto_peak_fwd"] if is_forward_control
-                    else keys["force_auto_peak_bwd"]
-                )
-                st.session_state[removed_key] = []
-                st.session_state[force_key] = True
-                st.rerun()
-
-            # Compute both direction removal targets for plotting/saved state.
-            selected_f_vg = float(st.session_state[keys["remove_slider_fwd"]])
-            selected_b_vg = float(st.session_state[keys["remove_slider_bwd"]])
-            selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
-            selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
-            selected_f_mu = float(res["mu_fwd"][selected_f_idx])
-            selected_b_mu = float(res["mu_bwd"][selected_b_idx])
-
-            removed_f_count = len(st.session_state[keys["removed_fwd"]])
-            removed_b_count = len(st.session_state[keys["removed_bwd"]])
-            right_controls.caption(
-                f"Removed · Fwd {removed_f_count} / Rev {removed_b_count}"
-            )
-
-            # ====================================================
-            # Transfer current point
-            # ====================================================
-            right_controls.markdown("---")
-            right_controls.markdown("### Transfer")
-
-            active_current_df = fwd if is_forward_control else bwd
-            active_current_key = (
-                keys["current_slider_fwd"] if is_forward_control
-                else keys["current_slider_bwd"]
-            )
-            active_current_vg = render_discrete_vg_control(
-                title=f"{control_direction} transfer Vg",
-                slider_label=f"{control_direction} transfer Vg",
-                state_key=active_current_key,
-                active_df=active_current_df,
-                default_value=float(active_current_df["GateV"].iloc[0]),
-                button_prefix=(
-                    f"current_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}"
-                ),
-                parent=right_controls,
-            )
-
             current_f_vg = float(st.session_state[keys["current_slider_fwd"]])
             current_b_vg = float(st.session_state[keys["current_slider_bwd"]])
             current_f_idx, current_f_row, current_f_density = current_density_at_vg(
@@ -1491,469 +1333,732 @@ with main_content:
                 bwd, current_b_vg, W
             )
 
-            active_density = (
-                current_f_density if is_forward_control else current_b_density
-            )
-            right_controls.caption(
-                f"|Id|/W = {sci_plain(active_density)} A/μm"
-            )
+            selected_f_vg = float(st.session_state[keys["remove_slider_fwd"]])
+            selected_b_vg = float(st.session_state[keys["remove_slider_bwd"]])
+            selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
+            selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
+            selected_f_mu = float(res["mu_fwd"][selected_f_idx])
+            selected_b_mu = float(res["mu_bwd"][selected_b_idx])
 
-            # Central analysis layout: parameters left, plots right
+            removed_f_count = len(st.session_state[keys["removed_fwd"]])
+            removed_b_count = len(st.session_state[keys["removed_bwd"]])
+
             # ====================================================
-            parameter_panel, plot_panel = st.columns([1.05, 1.55], gap="large")
+            # Parameters on top
+            # ====================================================
+            header_col, project_col, add_col, undo_col = st.columns(
+                [3.5, 2.2, 1.45, 0.75], gap="small"
+            )
+            header_col.markdown(
+                f"<h3 style='color:#333; margin:2px 0 0 0;'>"
+                f"📊 {selected_sheet} ({operating_mode})</h3>",
+                unsafe_allow_html=True,
+            )
 
-            with parameter_panel:
+            current_project = st.session_state.get("active_log_folder")
+            project_col.markdown(
+                f"<div style='font-size:13px; padding-top:8px;'>"
+                f"Project: <b>{current_project or 'None'}</b></div>",
+                unsafe_allow_html=True,
+            )
+
+            if add_col.button(
+                "Add to Project",
+                use_container_width=True,
+                disabled=current_project is None,
+            ):
+                # Store file bytes and exact analysis selections for click-to-restore.
+                try:
+                    uploaded_file.seek(0)
+                    saved_file_bytes = uploaded_file.read()
+                    uploaded_file.seek(0)
+                except Exception:
+                    saved_file_bytes = None
+
+                log_entry = {
+                    "_log_id": str(uuid.uuid4()),
+                    "_file_bytes": saved_file_bytes,
+                    "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
+                    "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
+                    "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "File": uploaded_file.name,
+                    "Sheet": selected_sheet,
+                    "Operating mode": operating_mode,
+                    "Width (μm)": float(W),
+                    "Length (μm)": float(L),
+                    "Cox (nF/cm²)": float(Cox_nf),
+                    "Drain voltage (V)": float(res["vd"]),
+                    "Gate voltage range": (
+                        f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
+                        f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+                    ),
+                    "Gate voltage step (V)": float(
+                        np.median(np.abs(np.diff(fwd["GateV"])))
+                    ) if len(fwd) > 1 else np.nan,
+                    "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
+                    "Forward Vth (V)": float(params["vth_fwd"]),
+                    "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
+                    "Forward SS (mV/dec)": float(params["ss_fwd"]),
+                    "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
+                    "Backward Vth (V)": float(params["vth_bwd"]),
+                    "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
+                    "Backward SS (mV/dec)": float(params["ss_bwd"]),
+                    "Hysteresis (V)": float(params["hysteresis"]),
+                    "ON/OFF ratio": float(params["onoff"]),
+                    "ON current / Width (A/μm)": float(params["on_density"]),
+                    "OFF current / Width (A/μm)": float(params["off_density"]),
+                    "Selected Forward Vg (V)": float(current_f_row["GateV"]),
+                    "Selected Forward |Id| / W (A/μm)": float(current_f_density),
+                    "Selected Backward Vg (V)": float(current_b_row["GateV"]),
+                    "Selected Backward |Id| / W (A/μm)": float(current_b_density),
+                    "Removed Forward points": int(removed_f_count),
+                    "Removed Backward points": int(removed_b_count),
+                }
+                st.session_state["analysis_log_folders"][current_project].append(log_entry)
+                st.session_state["active_log_folder"] = current_project
+                st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
+                st.session_state["active_file_bytes"] = saved_file_bytes
+                st.session_state["active_file_name"] = uploaded_file.name
+                save_projects_state()
+                header_col.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
+                st.rerun()
+
+            parameter_panel.markdown(
+                "<h4 style='margin:8px 0 3px 0;'>Overall Device Parameters</h4>",
+                unsafe_allow_html=True,
+            )
+            o1, o2 = parameter_panel.columns(2)
+            o1.markdown(
+                make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
+                unsafe_allow_html=True,
+            )
+            o2.markdown(
+                make_card(
+                    "ON Current / Width (A/μm)",
+                    sci(params["on_density"]),
+                    "#5B5F97",
+                ),
+                unsafe_allow_html=True,
+            )
+            o3, o4 = parameter_panel.columns(2)
+            o3.markdown(
+                make_card(
+                    "OFF Current / Width (A/μm)",
+                    sci(params["off_density"]),
+                    "#5B5F97",
+                ),
+                unsafe_allow_html=True,
+            )
+            o4.markdown(
+                make_card(
+                    "Hysteresis (V)",
+                    f"{params['hysteresis']:.2f}",
+                    "#5B5F97",
+                ),
+                unsafe_allow_html=True,
+            )
+
+            parameter_direction_key = (
+                f"parameter_direction_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            if parameter_direction_key not in st.session_state:
+                st.session_state[parameter_direction_key] = "Forward"
+
+            parameter_direction = parameter_panel.radio(
+                "Parameter sweep",
+                ["Forward", "Reverse"],
+                key=parameter_direction_key,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+
+            if parameter_direction == "Forward":
                 parameter_panel.markdown(
-                    f"<h3 style='color:#333; margin:0 0 4px 0;'>"
-                    f"📊 {selected_sheet} ({operating_mode})</h3>",
+                    "<h4 style='color:#6FADCF; margin:5px 0 2px 0;'>"
+                    "Forward Parameters</h4>",
+                    unsafe_allow_html=True,
+                )
+                p1, p2 = parameter_panel.columns(2)
+                p1.markdown(
+                    make_card(
+                        "Peak Mobility (cm²/V·s)",
+                        f"{params['mu_fwd']:.2f}",
+                        "#2E60AB",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p2.markdown(
+                    make_card(
+                        "Threshold Voltage, Vₜₕ (V)",
+                        f"{params['vth_fwd']:.2f}",
+                        "#A23B72",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p3, p4 = parameter_panel.columns(2)
+                p3.markdown(
+                    make_card(
+                        "Peak Point, Vg (V)",
+                        f"{params['peak_vg_fwd']:.1f}",
+                        "#F18F01",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p4.markdown(
+                    make_card(
+                        "SS (mV/dec)",
+                        f"{params['ss_fwd']:.1f}",
+                        "#18A558",
+                    ),
                     unsafe_allow_html=True,
                 )
 
-                # Save current result to selected folder
-                # ====================================================
-                parameter_panel.markdown("<h4 style='margin:2px 0 3px 0;'>Save Analysis Result</h4>", unsafe_allow_html=True)
-                save_col1, save_col2 = parameter_panel.columns([3, 1])
+                parameter_panel.markdown(
+                    "<h4 style='color:#555; margin:5px 0 2px 0;'>"
+                    "Selected Transfer Current</h4>",
+                    unsafe_allow_html=True,
+                )
+                t1, t2 = parameter_panel.columns(2)
+                t1.markdown(
+                    make_card(
+                        "Forward Vg (V)",
+                        f"{float(current_f_row['GateV']):.2f}",
+                        "#2E60AB",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                t2.markdown(
+                    make_card(
+                        "Forward |Id| / W (A/μm)",
+                        sci(current_f_density),
+                        "#2E60AB",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            else:
+                parameter_panel.markdown(
+                    "<h4 style='color:#F05650; margin:5px 0 2px 0;'>"
+                    "Reverse Parameters</h4>",
+                    unsafe_allow_html=True,
+                )
+                p1, p2 = parameter_panel.columns(2)
+                p1.markdown(
+                    make_card(
+                        "Peak Mobility (cm²/V·s)",
+                        f"{params['mu_bwd']:.2f}",
+                        "#2E60AB",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p2.markdown(
+                    make_card(
+                        "Threshold Voltage, Vₜₕ (V)",
+                        f"{params['vth_bwd']:.2f}",
+                        "#A23B72",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p3, p4 = parameter_panel.columns(2)
+                p3.markdown(
+                    make_card(
+                        "Peak Point, Vg (V)",
+                        f"{params['peak_vg_bwd']:.1f}",
+                        "#F18F01",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                p4.markdown(
+                    make_card(
+                        "SS (mV/dec)",
+                        f"{params['ss_bwd']:.1f}",
+                        "#18A558",
+                    ),
+                    unsafe_allow_html=True,
+                )
 
-                current_project = st.session_state.get("active_log_folder")
-                if current_project:
-                    save_col1.caption(f"Project: {current_project}")
-                else:
-                    save_col1.caption("Select a project first")
+                parameter_panel.markdown(
+                    "<h4 style='color:#555; margin:5px 0 2px 0;'>"
+                    "Selected Transfer Current</h4>",
+                    unsafe_allow_html=True,
+                )
+                t1, t2 = parameter_panel.columns(2)
+                t1.markdown(
+                    make_card(
+                        "Reverse Vg (V)",
+                        f"{float(current_b_row['GateV']):.2f}",
+                        "#F05650",
+                    ),
+                    unsafe_allow_html=True,
+                )
+                t2.markdown(
+                    make_card(
+                        "Reverse |Id| / W (A/μm)",
+                        sci(current_b_density),
+                        "#F05650",
+                    ),
+                    unsafe_allow_html=True,
+                )
 
-                if save_col2.button(
-                    "Add to Project",
-                    use_container_width=True,
-                    disabled=current_project is None,
-                ):
-                    # Store file bytes and exact analysis selections for click-to-restore.
-                    try:
-                        uploaded_file.seek(0)
-                        saved_file_bytes = uploaded_file.read()
-                        uploaded_file.seek(0)
-                    except Exception:
-                        saved_file_bytes = None
 
-                    log_entry = {
-                        "_log_id": str(uuid.uuid4()),
-                        "_file_bytes": saved_file_bytes,
-                        "_removed_fwd_indices": list(st.session_state[keys["removed_fwd"]]),
-                        "_removed_bwd_indices": list(st.session_state[keys["removed_bwd"]]),
-                        "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "File": uploaded_file.name,
-                        "Sheet": selected_sheet,
-                        "Operating mode": operating_mode,
-                        "Width (μm)": float(W),
-                        "Length (μm)": float(L),
-                        "Cox (nF/cm²)": float(Cox_nf),
-                        "Drain voltage (V)": float(res["vd"]),
-                        "Gate voltage range": (
-                            f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
-                            f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+
+            if undo_col.button(
+                "↶",
+                key=f"undo_project_{file_id}_{selected_sheet}_{operating_mode}",
+                help="이전 저장 상태로 되돌리기",
+                use_container_width=True,
+                disabled=current_project is None,
+            ):
+                records = st.session_state["analysis_log_folders"].get(
+                    current_project, []
+                )
+                current_id = st.session_state.get("persistent_active_log_id")
+                target_record = None
+                if records:
+                    current_index = next(
+                        (
+                            i for i, record in enumerate(records)
+                            if record.get("_log_id") == current_id
                         ),
-                        "Gate voltage step (V)": float(
-                            np.median(np.abs(np.diff(fwd["GateV"])))
-                        ) if len(fwd) > 1 else np.nan,
-                        "Forward mobility (cm²/V·s)": float(params["mu_fwd"]),
-                        "Forward Vth (V)": float(params["vth_fwd"]),
-                        "Forward peak Vg (V)": float(params["peak_vg_fwd"]),
-                        "Forward SS (mV/dec)": float(params["ss_fwd"]),
-                        "Backward mobility (cm²/V·s)": float(params["mu_bwd"]),
-                        "Backward Vth (V)": float(params["vth_bwd"]),
-                        "Backward peak Vg (V)": float(params["peak_vg_bwd"]),
-                        "Backward SS (mV/dec)": float(params["ss_bwd"]),
-                        "Hysteresis (V)": float(params["hysteresis"]),
-                        "ON/OFF ratio": float(params["onoff"]),
-                        "ON current / Width (A/μm)": float(params["on_density"]),
-                        "OFF current / Width (A/μm)": float(params["off_density"]),
-                        "Selected Forward Vg (V)": float(current_f_row["GateV"]),
-                        "Selected Forward |Id| / W (A/μm)": float(current_f_density),
-                        "Selected Backward Vg (V)": float(current_b_row["GateV"]),
-                        "Selected Backward |Id| / W (A/μm)": float(current_b_density),
-                        "Removed Forward points": int(removed_f_count),
-                        "Removed Backward points": int(removed_b_count),
-                    }
-                    st.session_state["analysis_log_folders"][current_project].append(log_entry)
-                    st.session_state["active_log_folder"] = current_project
-                    st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
-                    st.session_state["active_file_bytes"] = saved_file_bytes
-                    st.session_state["active_file_name"] = uploaded_file.name
-                    save_projects_state()
-                    parameter_panel.success(f"'{current_project}' 프로젝트에 로그를 저장했습니다.")
+                        len(records),
+                    )
+                    if current_index > 0:
+                        target_record = records[current_index - 1]
+                    elif len(records) > 1:
+                        target_record = records[-2]
+                if target_record is not None:
+                    restore_log_state(target_record)
                     st.rerun()
 
-                parameter_panel.markdown(
-                    "<h4 style='margin:8px 0 3px 0;'>Overall Device Parameters</h4>",
-                    unsafe_allow_html=True,
-                )
-                o1, o2 = parameter_panel.columns(2)
-                o1.markdown(
-                    make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
-                    unsafe_allow_html=True,
-                )
-                o2.markdown(
-                    make_card(
-                        "ON Current / Width (A/μm)",
-                        sci(params["on_density"]),
-                        "#5B5F97",
-                    ),
-                    unsafe_allow_html=True,
-                )
-                o3, o4 = parameter_panel.columns(2)
-                o3.markdown(
-                    make_card(
-                        "OFF Current / Width (A/μm)",
-                        sci(params["off_density"]),
-                        "#5B5F97",
-                    ),
-                    unsafe_allow_html=True,
-                )
-                o4.markdown(
-                    make_card(
-                        "Hysteresis (V)",
-                        f"{params['hysteresis']:.2f}",
-                        "#5B5F97",
-                    ),
-                    unsafe_allow_html=True,
-                )
-
-                parameter_direction_key = (
-                    f"parameter_direction_{file_id}_{selected_sheet}_{operating_mode}"
-                )
-                if parameter_direction_key not in st.session_state:
-                    st.session_state[parameter_direction_key] = "Forward"
-
-                parameter_direction = parameter_panel.radio(
-                    "Parameter sweep",
-                    ["Forward", "Reverse"],
-                    key=parameter_direction_key,
-                    horizontal=True,
-                    label_visibility="collapsed",
-                )
-
-                if parameter_direction == "Forward":
-                    parameter_panel.markdown(
-                        "<h4 style='color:#6FADCF; margin:5px 0 2px 0;'>"
-                        "Forward Parameters</h4>",
-                        unsafe_allow_html=True,
-                    )
-                    p1, p2 = parameter_panel.columns(2)
-                    p1.markdown(
-                        make_card(
-                            "Peak Mobility (cm²/V·s)",
-                            f"{params['mu_fwd']:.2f}",
-                            "#2E60AB",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    p2.markdown(
-                        make_card(
-                            "Threshold Voltage, Vₜₕ (V)",
-                            f"{params['vth_fwd']:.2f}",
-                            "#A23B72",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    p3, p4 = parameter_panel.columns(2)
-                    p3.markdown(
-                        make_card(
-                            "Peak Point, Vg (V)",
-                            f"{params['peak_vg_fwd']:.1f}",
-                            "#F18F01",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    p4.markdown(
-                        make_card(
-                            "SS (mV/dec)",
-                            f"{params['ss_fwd']:.1f}",
-                            "#18A558",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-                    parameter_panel.markdown(
-                        "<h4 style='color:#555; margin:5px 0 2px 0;'>"
-                        "Selected Transfer Current</h4>",
-                        unsafe_allow_html=True,
-                    )
-                    t1, t2 = parameter_panel.columns(2)
-                    t1.markdown(
-                        make_card(
-                            "Forward Vg (V)",
-                            f"{float(current_f_row['GateV']):.2f}",
-                            "#2E60AB",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    t2.markdown(
-                        make_card(
-                            "Forward |Id| / W (A/μm)",
-                            sci(current_f_density),
-                            "#2E60AB",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    parameter_panel.markdown(
-                        "<h4 style='color:#F05650; margin:5px 0 2px 0;'>"
-                        "Reverse Parameters</h4>",
-                        unsafe_allow_html=True,
-                    )
-                    p1, p2 = parameter_panel.columns(2)
-                    p1.markdown(
-                        make_card(
-                            "Peak Mobility (cm²/V·s)",
-                            f"{params['mu_bwd']:.2f}",
-                            "#2E60AB",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    p2.markdown(
-                        make_card(
-                            "Threshold Voltage, Vₜₕ (V)",
-                            f"{params['vth_bwd']:.2f}",
-                            "#A23B72",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    p3, p4 = parameter_panel.columns(2)
-                    p3.markdown(
-                        make_card(
-                            "Peak Point, Vg (V)",
-                            f"{params['peak_vg_bwd']:.1f}",
-                            "#F18F01",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    p4.markdown(
-                        make_card(
-                            "SS (mV/dec)",
-                            f"{params['ss_bwd']:.1f}",
-                            "#18A558",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-                    parameter_panel.markdown(
-                        "<h4 style='color:#555; margin:5px 0 2px 0;'>"
-                        "Selected Transfer Current</h4>",
-                        unsafe_allow_html=True,
-                    )
-                    t1, t2 = parameter_panel.columns(2)
-                    t1.markdown(
-                        make_card(
-                            "Reverse Vg (V)",
-                            f"{float(current_b_row['GateV']):.2f}",
-                            "#F05650",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                    t2.markdown(
-                        make_card(
-                            "Reverse |Id| / W (A/μm)",
-                            sci(current_b_density),
-                            "#F05650",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-
-            with plot_panel:
-
-                graph_mobility_title = (
-                    "Linear Mobility"
-                    if operating_mode == "Linear"
-                    else "Saturation Mobility"
-                )
-
-                fig = make_subplots(
-                    rows=3,
-                    cols=1,
-                    subplot_titles=(
-                        "Transfer (Log Scale)",
-                        "Transfer (Linear Scale)",
-                        graph_mobility_title,
-                    ),
-                    vertical_spacing=0.12,
-                )
-
-                color_fwd = "blue"
-                color_bwd = "red"
-
-                vg_fwd = fwd["GateV"]
-                id_fwd = fwd["DrainI_active"]
-                vg_bwd = bwd["GateV"]
-                id_bwd = bwd["DrainI_active"]
-
-                # Transfer log
-                fig.add_trace(go.Scatter(
-                    x=vg_fwd, y=np.abs(id_fwd),
-                    name="Forward", line=dict(color=color_fwd),
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=vg_bwd, y=np.abs(id_bwd),
-                    name="Backward", line=dict(color=color_bwd),
-                ), row=1, col=1)
-
-                if "GateI" in df.columns and removed_f_count == 0 and removed_b_count == 0:
-                    ig = pd.to_numeric(df["GateI"], errors="coerce")
-                    turning = len(res["fwd_raw"]) - 1
-                    ig_f = ig.iloc[:turning + 1].reset_index(drop=True)
-                    ig_b = ig.iloc[turning:].reset_index(drop=True)
-                    fig.add_trace(go.Scatter(
-                        x=res["fwd_raw"]["GateV"], y=np.abs(ig_f),
-                        name="Ig (Fwd)", line=dict(color="dimgray", dash="dot"),
-                        showlegend=False,
-                    ), row=1, col=1)
-                    fig.add_trace(go.Scatter(
-                        x=res["bwd_raw"]["GateV"], y=np.abs(ig_b),
-                        name="Ig (Bwd)", line=dict(color="dimgray", dash="dot"),
-                        showlegend=False,
-                    ), row=1, col=1)
-
-                # Transfer linear
-                fig.add_trace(go.Scatter(
-                    x=vg_fwd, y=np.abs(id_fwd),
-                    name="Forward", line=dict(color=color_fwd),
-                    showlegend=False,
-                ), row=2, col=1)
-                fig.add_trace(go.Scatter(
-                    x=vg_bwd, y=np.abs(id_bwd),
-                    name="Backward", line=dict(color=color_bwd),
-                    showlegend=False,
-                ), row=2, col=1)
-
-                # Selected transfer points
-                for row_num in (1, 2):
-                    fig.add_trace(go.Scatter(
-                        x=[float(current_f_row["GateV"])],
-                        y=[abs(float(current_f_row["DrainI_active"]))],
-                        mode="markers",
-                        marker=dict(
-                            symbol="circle-open", size=11, color="black",
-                            line=dict(width=2)
-                        ),
-                        showlegend=False,
-                    ), row=row_num, col=1)
-                    fig.add_trace(go.Scatter(
-                        x=[float(current_b_row["GateV"])],
-                        y=[abs(float(current_b_row["DrainI_active"]))],
-                        mode="markers",
-                        marker=dict(
-                            symbol="square-open", size=11, color="black",
-                            line=dict(width=2)
-                        ),
-                        showlegend=False,
-                    ), row=row_num, col=1)
-
-                # Mobility only — conductance plot removed
-                fig.add_trace(go.Scatter(
-                    x=vg_fwd, y=res["mu_fwd"],
-                    name="Forward mobility", line=dict(color=color_fwd),
-                    showlegend=False,
-                ), row=3, col=1)
-                fig.add_trace(go.Scatter(
-                    x=vg_bwd, y=res["mu_bwd"],
-                    name="Backward mobility", line=dict(color=color_bwd),
-                    showlegend=False,
-                ), row=3, col=1)
-
-                fig.add_trace(go.Scatter(
-                    x=[float(selected_f_row["GateV"])],
-                    y=[selected_f_mu],
-                    mode="markers",
-                    marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
-                    showlegend=False,
-                ), row=3, col=1)
-                fig.add_trace(go.Scatter(
-                    x=[float(selected_b_row["GateV"])],
-                    y=[selected_b_mu],
-                    mode="markers",
-                    marker=dict(symbol="x", size=13, color="black", line=dict(width=2)),
-                    showlegend=False,
-                ), row=3, col=1)
-
-                peak_f_vg = params["peak_vg_fwd"]
-                peak_b_vg = params["peak_vg_bwd"]
-                fig.add_vline(
-                    x=peak_f_vg, line_width=1.5, line_dash="dash",
-                    line_color=color_fwd, row=3, col=1
-                )
-                fig.add_vline(
-                    x=peak_b_vg, line_width=1.5, line_dash="dash",
-                    line_color=color_bwd, row=3, col=1
-                )
-
-                vd_formatted = f"{res['vd']:.2f}".rstrip("0").rstrip(".")
-                fig.add_annotation(
-                    x=0.01, y=0.02, xref="x domain", yref="y domain",
-                    text=f"<b>V<sub>D</sub> = {vd_formatted} V</b>",
-                    showarrow=False, font=dict(size=12, color="black"),
-                    row=1, col=1,
-                )
-
-                common_axis = dict(
-                    ticks="outside", tickwidth=1.5, tickcolor="black", ticklen=7,
-                    showline=True, linewidth=1.5, linecolor="black", mirror=True,
-                    showgrid=True, gridwidth=1, gridcolor="lightgray",
-                    griddash="dot", zeroline=False,
-                    title_font=dict(size=16), tickfont=dict(size=12),
-                )
-
-                vg_all = pd.concat([vg_fwd, vg_bwd])
-                vg_range = abs(vg_all.max() - vg_all.min())
-                dynamic_dtick = 2.5 if vg_range <= 10 else 10
-
-                fig.update_xaxes(
-                    title_text="Gate Voltage (V)", dtick=dynamic_dtick, **common_axis
-                )
-                fig.update_yaxes(**common_axis)
-                fig.update_yaxes(
-                    title_text="Drain Current (A)", type="log", row=1, col=1
-                )
-                fig.update_yaxes(
-                    title_text="Drain Current (A)", row=2, col=1
-                )
-                fig.update_yaxes(
-                    title_text=f"{graph_mobility_title} (cm²/V·s)", row=3, col=1
-                )
-
-                fig.update_layout(
-                    height=980,
-                    autosize=True,
-                    template="plotly_white",
-                    margin=dict(t=80, b=60, l=75, r=25),
-                    legend=dict(orientation="h", y=1.04, x=0),
-                )
-                fig.update_annotations(font_size=16)
-                plot_panel.plotly_chart(fig, use_container_width=True)
-
-            # ====================================================
-            # Download active data
-            # ====================================================
-            export_df = pd.concat([
-                pd.DataFrame({
-                    "GateV_forward": vg_fwd.reset_index(drop=True),
-                    "DrainI_forward_active": id_fwd.reset_index(drop=True),
-                    "DrainI_over_width_forward_A_per_um": np.abs(id_fwd.reset_index(drop=True)) / W,
-                    "gm_forward_active": pd.Series(res["gm_fwd"]),
-                    "mobility_forward_active": pd.Series(res["mu_fwd"]),
-                    "source_index_forward": fwd["__source_index"].reset_index(drop=True),
-                }),
-                pd.DataFrame({
-                    "GateV_backward": vg_bwd.reset_index(drop=True),
-                    "DrainI_backward_active": id_bwd.reset_index(drop=True),
-                    "DrainI_over_width_backward_A_per_um": np.abs(id_bwd.reset_index(drop=True)) / W,
-                    "gm_backward_active": pd.Series(res["gm_bwd"]),
-                    "mobility_backward_active": pd.Series(res["mu_bwd"]),
-                    "source_index_backward": bwd["__source_index"].reset_index(drop=True),
-                }),
-            ], axis=1)
-
-            plot_panel.download_button(
-                "Download active analysis (CSV)",
-                data=export_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"{selected_sheet}_{operating_mode}_manual_removed.csv",
-                mime="text/csv",
+            # Overall parameters first, with sweep selector at right
+            overall_title_col, parameter_toggle_col = st.columns([4.2, 1.8])
+            overall_title_col.markdown(
+                "<h4 style='margin:8px 0 3px 0;'>Overall Data Parameters</h4>",
+                unsafe_allow_html=True,
             )
 
+            parameter_direction_key = (
+                f"parameter_direction_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            if parameter_direction_key not in st.session_state:
+                st.session_state[parameter_direction_key] = "Forward"
+
+            parameter_direction = parameter_toggle_col.radio(
+                "Parameter sweep",
+                ["Forward", "Reverse"],
+                key=parameter_direction_key,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            show_forward = parameter_direction == "Forward"
+
+            o1, o2, o3, o4 = st.columns(4)
+            o1.markdown(
+                make_card("ON/OFF Ratio", sci(params["onoff"]), "#5B5F97"),
+                unsafe_allow_html=True,
+            )
+            o2.markdown(
+                make_card(
+                    "ON Current / Width (A/μm)",
+                    sci(params["on_density"]),
+                    "#5B5F97",
+                ),
+                unsafe_allow_html=True,
+            )
+            o3.markdown(
+                make_card(
+                    "OFF Current / Width (A/μm)",
+                    sci(params["off_density"]),
+                    "#5B5F97",
+                ),
+                unsafe_allow_html=True,
+            )
+            o4.markdown(
+                make_card(
+                    "Hysteresis (V)",
+                    f"{params['hysteresis']:.2f}",
+                    "#5B5F97",
+                ),
+                unsafe_allow_html=True,
+            )
+
+            # Current point selector directly below ON/OFF current cards
+            current_control_col, current_value_col = st.columns([3.5, 1.5])
+            current_df = fwd if show_forward else bwd
+            current_key = (
+                keys["current_slider_fwd"] if show_forward
+                else keys["current_slider_bwd"]
+            )
+            current_short = "Fwd" if show_forward else "Rev"
+            current_vg = render_discrete_vg_control(
+                title="",
+                slider_label="Current Vg",
+                state_key=current_key,
+                active_df=current_df,
+                default_value=float(current_df["GateV"].iloc[0]),
+                button_prefix=(
+                    f"current_inline_{current_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                parent=current_control_col,
+            )
+            if show_forward:
+                current_f_idx, current_f_row, current_f_density = current_density_at_vg(
+                    fwd, current_vg, W
+                )
+                active_current_density = current_f_density
+            else:
+                current_b_idx, current_b_row, current_b_density = current_density_at_vg(
+                    bwd, current_vg, W
+                )
+                active_current_density = current_b_density
+            current_value_col.caption(
+                f"{current_short} |Id|/W = "
+                f"{sci_plain(active_current_density)} A/μm"
+            )
+
+            # Selected direction parameters
+            direction_color = "#6FADCF" if show_forward else "#F05650"
+            st.markdown(
+                f"<h4 style='color:{direction_color}; margin:5px 0 2px 0;'>"
+                f"{parameter_direction} Parameters</h4>",
+                unsafe_allow_html=True,
+            )
+
+            if show_forward:
+                mu_value = params["mu_fwd"]
+                vth_value = params["vth_fwd"]
+                peak_value = params["peak_vg_fwd"]
+                ss_value = params["ss_fwd"]
+                peak_df = fwd
+                peak_key = keys["peak_slider_fwd"]
+                auto_idx = res["auto_idx_f"]
+                force_key = keys["force_auto_peak_fwd"]
+                short_name = "Fwd"
+            else:
+                mu_value = params["mu_bwd"]
+                vth_value = params["vth_bwd"]
+                peak_value = params["peak_vg_bwd"]
+                ss_value = params["ss_bwd"]
+                peak_df = bwd
+                peak_key = keys["peak_slider_bwd"]
+                auto_idx = res["auto_idx_b"]
+                force_key = keys["force_auto_peak_bwd"]
+                short_name = "Rev"
+
+            p1, p2, p3, p4 = st.columns(4)
+            p1.markdown(
+                make_card("Peak Mobility (cm²/V·s)", f"{mu_value:.2f}", "#2E60AB"),
+                unsafe_allow_html=True,
+            )
+            p2.markdown(
+                make_card(
+                    "Threshold Voltage, Vₜₕ (V)",
+                    f"{vth_value:.2f}",
+                    "#A23B72",
+                ),
+                unsafe_allow_html=True,
+            )
+            p3.markdown(
+                make_card("Peak Point, Vg (V)", f"{peak_value:.1f}", "#F18F01"),
+                unsafe_allow_html=True,
+            )
+            p4.markdown(
+                make_card("SS (mV/dec)", f"{ss_value:.1f}", "#18A558"),
+                unsafe_allow_html=True,
+            )
+
+            # Peak selector directly below mobility parameter
+            peak_control_col, auto_peak_col = st.columns([4.2, 1.1])
+            selected_peak_vg = render_discrete_vg_control(
+                title="",
+                slider_label="Peak Vg",
+                state_key=peak_key,
+                active_df=peak_df,
+                default_value=float(peak_df["GateV"].iloc[auto_idx]),
+                button_prefix=(
+                    f"peak_inline_{short_name}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                parent=peak_control_col,
+            )
+            if auto_peak_col.button(
+                "Auto Max",
+                key=(
+                    f"auto_inline_{short_name}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                use_container_width=True,
+            ):
+                st.session_state[force_key] = True
+                st.rerun()
+
+            # Recalculate selected peak immediately
+            peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
+            peak_b_vg = float(st.session_state[keys["peak_slider_bwd"]])
+            idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
+            idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
+            params = parameter_values(
+                fwd["GateV"], fwd["DrainI_active"],
+                res["gm_fwd"], res["mu_fwd"], idx_f,
+                bwd["GateV"], bwd["DrainI_active"],
+                res["gm_bwd"], res["mu_bwd"], idx_b,
+                operating_mode, W,
+            )
+
+            # ====================================================
+            # Three plots in one horizontal row
+            # ====================================================
+            graph_mobility_title = (
+                "Linear Mobility"
+                if operating_mode == "Linear"
+                else "Saturation Mobility"
+            )
+            fig = make_subplots(
+                rows=1,
+                cols=3,
+                subplot_titles=(
+                    "Transfer (Log)",
+                    "Transfer (Linear)",
+                    graph_mobility_title,
+                ),
+                horizontal_spacing=0.10,
+            )
+
+            color_fwd = "blue"
+            color_bwd = "red"
+            vg_fwd = fwd["GateV"]
+            id_fwd = fwd["DrainI_active"]
+            vg_bwd = bwd["GateV"]
+            id_bwd = bwd["DrainI_active"]
+
+            # Drain-current traces
+            for col_num in (1, 2):
+                fig.add_trace(
+                    go.Scatter(
+                        x=vg_fwd, y=np.abs(id_fwd),
+                        name="Id Forward",
+                        line=dict(color=color_fwd),
+                        showlegend=(col_num == 1),
+                    ),
+                    row=1, col=col_num,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=vg_bwd, y=np.abs(id_bwd),
+                        name="Id Reverse",
+                        line=dict(color=color_bwd),
+                        showlegend=(col_num == 1),
+                    ),
+                    row=1, col=col_num,
+                )
+
+            # Gate-current traces aligned by source index, even after point removal
+            if "GateI" in df.columns:
+                gate_i = pd.to_numeric(df["GateI"], errors="coerce")
+                ig_f = gate_i.iloc[
+                    fwd["__source_index"].astype(int).to_numpy()
+                ].reset_index(drop=True)
+                ig_b = gate_i.iloc[
+                    bwd["__source_index"].astype(int).to_numpy()
+                ].reset_index(drop=True)
+
+                for col_num in (1, 2):
+                    fig.add_trace(
+                        go.Scatter(
+                            x=vg_fwd, y=np.abs(ig_f),
+                            name="Ig Forward",
+                            line=dict(color="dimgray", dash="dot"),
+                            showlegend=(col_num == 1),
+                        ),
+                        row=1, col=col_num,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=vg_bwd, y=np.abs(ig_b),
+                            name="Ig Reverse",
+                            line=dict(color="black", dash="dot"),
+                            showlegend=(col_num == 1),
+                        ),
+                        row=1, col=col_num,
+                    )
+
+            # Selected current points
+            fig.add_trace(
+                go.Scatter(
+                    x=[float(current_f_row["GateV"])],
+                    y=[abs(float(current_f_row["DrainI_active"]))],
+                    mode="markers",
+                    marker=dict(symbol="circle-open", size=10, color="black"),
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[float(current_b_row["GateV"])],
+                    y=[abs(float(current_b_row["DrainI_active"]))],
+                    mode="markers",
+                    marker=dict(symbol="square-open", size=10, color="black"),
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+
+            # Mobility
+            fig.add_trace(
+                go.Scatter(
+                    x=vg_fwd, y=res["mu_fwd"],
+                    name="Mobility Forward",
+                    line=dict(color=color_fwd),
+                    showlegend=False,
+                ),
+                row=1, col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=vg_bwd, y=res["mu_bwd"],
+                    name="Mobility Reverse",
+                    line=dict(color=color_bwd),
+                    showlegend=False,
+                ),
+                row=1, col=3,
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=[float(fwd["GateV"].iloc[idx_f])],
+                    y=[float(res["mu_fwd"][idx_f])],
+                    mode="markers",
+                    marker=dict(symbol="x", size=11, color="black"),
+                    showlegend=False,
+                ),
+                row=1, col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[float(bwd["GateV"].iloc[idx_b])],
+                    y=[float(res["mu_bwd"][idx_b])],
+                    mode="markers",
+                    marker=dict(symbol="x", size=11, color="black"),
+                    showlegend=False,
+                ),
+                row=1, col=3,
+            )
+
+            common_axis = dict(
+                ticks="outside",
+                showline=True,
+                mirror=True,
+                showgrid=True,
+                gridcolor="lightgray",
+                griddash="dot",
+                zeroline=False,
+            )
+            fig.update_xaxes(title_text="Gate Voltage (V)", **common_axis)
+            fig.update_yaxes(
+                title_text="Current (A)", type="log",
+                row=1, col=1, **common_axis,
+            )
+            fig.update_yaxes(
+                title_text="Current (A)",
+                row=1, col=2, **common_axis,
+            )
+            fig.update_yaxes(
+                title_text="Mobility (cm²/V·s)",
+                row=1, col=3, **common_axis,
+            )
+            fig.update_layout(
+                height=440,
+                template="plotly_white",
+                margin=dict(t=60, b=50, l=50, r=20),
+                legend=dict(orientation="h", y=1.13, x=0),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Peak elimination below plots
+            removal_direction_key = (
+                f"removal_direction_{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            if removal_direction_key not in st.session_state:
+                st.session_state[removal_direction_key] = "Forward"
+
+            removal_header_col, removal_toggle_col = st.columns([4.2, 1.8])
+            removal_header_col.markdown(
+                "<div style='font-size:13px; font-weight:700;'>Peak Elimination</div>",
+                unsafe_allow_html=True,
+            )
+            removal_direction = removal_toggle_col.radio(
+                "Removal sweep",
+                ["Forward", "Reverse"],
+                key=removal_direction_key,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+
+            remove_forward = removal_direction == "Forward"
+            removal_df = fwd if remove_forward else bwd
+            removal_key = (
+                keys["remove_slider_fwd"] if remove_forward
+                else keys["remove_slider_bwd"]
+            )
+            removed_key = (
+                keys["removed_fwd"] if remove_forward
+                else keys["removed_bwd"]
+            )
+            removal_force_key = (
+                keys["force_auto_peak_fwd"] if remove_forward
+                else keys["force_auto_peak_bwd"]
+            )
+            removal_short = "Fwd" if remove_forward else "Rev"
+            removal_auto_idx = (
+                res["auto_idx_f"] if remove_forward else res["auto_idx_b"]
+            )
+
+            removal_slider_col, remove_button_col, reset_button_col = st.columns(
+                [4.0, 1.0, 1.0]
+            )
+            removal_vg = render_discrete_vg_control(
+                title="",
+                slider_label="Removal Vg",
+                state_key=removal_key,
+                active_df=removal_df,
+                default_value=float(
+                    removal_df["GateV"].iloc[removal_auto_idx]
+                ),
+                button_prefix=(
+                    f"remove_below_{removal_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                parent=removal_slider_col,
+            )
+            removal_idx, removal_row = nearest_row_by_vg(
+                removal_df, removal_vg
+            )
+
+            if remove_button_col.button(
+                "Remove",
+                key=(
+                    f"remove_action_{removal_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                use_container_width=True,
+            ):
+                source_idx = int(removal_row["__source_index"])
+                removed = list(st.session_state[removed_key])
+                if source_idx not in removed:
+                    removed.append(source_idx)
+                    st.session_state[removed_key] = removed
+                st.session_state[removal_force_key] = True
+                st.rerun()
+
+            if reset_button_col.button(
+                "Reset",
+                key=(
+                    f"reset_action_{removal_short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                ),
+                use_container_width=True,
+            ):
+                st.session_state[removed_key] = []
+                st.session_state[removal_force_key] = True
+                st.rerun()
