@@ -5,7 +5,6 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.signal import savgol_filter
 
 st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
 st.title("FET-Analysis_Minjae")
@@ -37,52 +36,6 @@ W = st.sidebar.number_input("Width (μm)", value=1000.0, step=50.0)
 L = st.sidebar.number_input("Length (μm)", value=100.0, step=50.0)
 Cox_nf = st.sidebar.number_input("Capacitance (nF/cm⁻²)", value=34.5)
 Cox = Cox_nf * 1e-9
-
-# ============================================================
-# Sidebar: smoothing only (no automatic spike detection)
-# ============================================================
-st.sidebar.markdown("---")
-st.sidebar.header("Smoothing")
-
-apply_smoothing = st.sidebar.checkbox(
-    "Apply smoothing",
-    value=False,
-    help="수동으로 제거한 점을 제외한 나머지 데이터에만 smoothing을 적용합니다."
-)
-
-smooth_center = st.sidebar.number_input(
-    "Center Vg (V)",
-    value=0.0,
-    step=0.5,
-    disabled=not apply_smoothing,
-)
-smooth_half_width = st.sidebar.number_input(
-    "Smoothing range (±V)",
-    min_value=0.0,
-    value=5.0,
-    step=0.5,
-    disabled=not apply_smoothing,
-)
-smooth_window = st.sidebar.slider(
-    "Smoothing window",
-    min_value=3,
-    max_value=31,
-    value=7,
-    step=2,
-    disabled=not apply_smoothing,
-)
-smooth_polyorder = st.sidebar.slider(
-    "Polynomial order",
-    min_value=1,
-    max_value=4,
-    value=2,
-    disabled=not apply_smoothing,
-)
-smooth_log_domain = st.sidebar.checkbox(
-    "Smooth in log(|Id|)",
-    value=True,
-    disabled=not apply_smoothing,
-)
 
 # ============================================================
 # Helpers
@@ -133,62 +86,6 @@ def calculate_ss(id_vals, vg_vals):
     slope = slope[np.isfinite(slope) & (slope > 0)]
     return 1000.0 / np.max(slope) if len(slope) else np.nan
 
-
-def smooth_current(vg, current):
-    """
-    자동 spike 검출 없이 smoothing만 수행.
-    지정 Vg 범위 안의 남아 있는 점들만 Savitzky-Golay 처리한다.
-    """
-    vg = np.asarray(vg, dtype=float)
-    current = np.asarray(current, dtype=float)
-    output = current.copy()
-
-    if not apply_smoothing:
-        return output
-
-    valid = np.isfinite(vg) & np.isfinite(current)
-    region = valid & (np.abs(vg - smooth_center) <= smooth_half_width)
-    idx = np.where(region)[0]
-
-    if len(idx) < 3:
-        return output
-
-    values = current[idx]
-    signs = np.sign(values)
-    signs[signs == 0] = 1.0
-
-    if smooth_log_domain:
-        magnitude = np.abs(values)
-        nonzero = magnitude[magnitude > 0]
-        floor = (
-            max(np.min(nonzero) * 0.1, np.finfo(float).tiny)
-            if len(nonzero)
-            else np.finfo(float).tiny
-        )
-        work = np.log10(np.maximum(magnitude, floor))
-    else:
-        work = values.copy()
-
-    window = int(smooth_window)
-    if window % 2 == 0:
-        window += 1
-
-    max_window = len(work) if len(work) % 2 == 1 else len(work) - 1
-    window = min(window, max_window)
-
-    if window >= 3:
-        poly = min(int(smooth_polyorder), window - 1)
-        if window > poly:
-            work = savgol_filter(
-                work,
-                window_length=window,
-                polyorder=poly,
-                mode="interp",
-            )
-
-    corrected = signs * np.power(10.0, work) if smooth_log_domain else work
-    output[idx] = corrected
-    return output
 
 
 def split_sweep(df):
@@ -311,6 +208,8 @@ def state_keys(file_id, sheet_name, mode):
         "removed_bwd": f"removed_bwd_{stem}",
         "remove_slider_fwd": f"remove_slider_fwd_{stem}",
         "remove_slider_bwd": f"remove_slider_bwd_{stem}",
+        "peak_slider_fwd": f"peak_slider_fwd_{stem}",
+        "peak_slider_bwd": f"peak_slider_bwd_{stem}",
     }
 
 
@@ -322,12 +221,10 @@ def initialize_removal_state(keys):
 
 
 def build_active_sweep(part, removed_source_indices):
+    """수동 제거된 원래 행을 제외하고 나머지 raw 데이터를 그대로 사용."""
     removed = set(int(v) for v in removed_source_indices)
     active = part[~part["__source_index"].isin(removed)].copy().reset_index(drop=True)
-    active["DrainI_active"] = smooth_current(
-        active["GateV"].to_numpy(),
-        active["DrainI"].to_numpy(),
-    )
+    active["DrainI_active"] = active["DrainI"].to_numpy()
     return active
 
 
@@ -362,9 +259,25 @@ def analyze_sheet(df, file_id, sheet_name):
         operating_mode, W, L, Cox, vd
     )
 
-    # 매 rerun마다 현재 active mobility에서 최댓값을 새로 탐색
-    idx_f = auto_peak_index(mu_fwd)
-    idx_b = auto_peak_index(mu_bwd)
+    # 현재 active mobility에서 자동 최대점 탐색
+    auto_idx_f = auto_peak_index(mu_fwd)
+    auto_idx_b = auto_peak_index(mu_bwd)
+
+    # 최초 실행 또는 선택점이 제거되어 더 이상 존재하지 않을 때만 자동 최대점으로 재설정
+    if keys["peak_slider_fwd"] not in st.session_state:
+        st.session_state[keys["peak_slider_fwd"]] = float(fwd["GateV"].iloc[auto_idx_f])
+    if keys["peak_slider_bwd"] not in st.session_state:
+        st.session_state[keys["peak_slider_bwd"]] = float(bwd["GateV"].iloc[auto_idx_b])
+
+    peak_target_f = float(st.session_state[keys["peak_slider_fwd"]])
+    peak_target_b = float(st.session_state[keys["peak_slider_bwd"]])
+
+    idx_f = int((fwd["GateV"] - peak_target_f).abs().idxmin())
+    idx_b = int((bwd["GateV"] - peak_target_b).abs().idxmin())
+
+    # 실제 남아 있는 Vg에 snap
+    st.session_state[keys["peak_slider_fwd"]] = float(fwd["GateV"].iloc[idx_f])
+    st.session_state[keys["peak_slider_bwd"]] = float(bwd["GateV"].iloc[idx_b])
 
     params = parameter_values(
         fwd["GateV"], fwd["DrainI_active"], gm_fwd, mu_fwd, idx_f,
@@ -385,6 +298,8 @@ def analyze_sheet(df, file_id, sheet_name):
         "mu_bwd": mu_bwd,
         "idx_f": idx_f,
         "idx_b": idx_b,
+        "auto_idx_f": auto_idx_f,
+        "auto_idx_b": auto_idx_b,
         "params": params,
     }
 
@@ -392,6 +307,98 @@ def analyze_sheet(df, file_id, sheet_name):
 def nearest_row_by_vg(active_df, selected_vg):
     idx = int((active_df["GateV"] - float(selected_vg)).abs().idxmin())
     return idx, active_df.iloc[idx]
+
+
+
+def sorted_unique_vg(active_df):
+    """현재 sweep에 남아 있는 실제 Vg 값 목록."""
+    values = pd.to_numeric(active_df["GateV"], errors="coerce").dropna().unique()
+    return np.sort(values.astype(float))
+
+
+def move_to_adjacent_vg(current_value, active_df, direction):
+    """
+    direction=-1: 정렬된 Vg에서 한 단계 감소
+    direction=+1: 정렬된 Vg에서 한 단계 증가
+    제거된 Vg는 목록에 없으므로 자동으로 건너뛴다.
+    """
+    values = sorted_unique_vg(active_df)
+    if len(values) == 0:
+        return float(current_value)
+
+    nearest = int(np.argmin(np.abs(values - float(current_value))))
+    target = int(np.clip(nearest + int(direction), 0, len(values) - 1))
+    return float(values[target])
+
+
+def initialize_slider_in_range(key, active_df, default_value):
+    values = sorted_unique_vg(active_df)
+    if len(values) == 0:
+        return
+
+    if key not in st.session_state:
+        st.session_state[key] = float(default_value)
+
+    current = float(st.session_state[key])
+    nearest = int(np.argmin(np.abs(values - current)))
+    st.session_state[key] = float(values[nearest])
+
+
+def render_discrete_vg_control(
+    title,
+    slider_label,
+    state_key,
+    active_df,
+    default_value,
+    button_prefix,
+):
+    """
+    - 버튼 | 실제 Vg slider | + 버튼
+    슬라이더 step은 원 데이터의 대표 Vg 간격을 사용하고,
+    버튼은 현재 남은 실제 Vg 목록에서 정확히 한 행씩 이동한다.
+    """
+    initialize_slider_in_range(state_key, active_df, default_value)
+
+    values = sorted_unique_vg(active_df)
+    if len(values) == 0:
+        return np.nan
+
+    diffs = np.diff(values)
+    positive_diffs = np.abs(diffs[np.abs(diffs) > np.finfo(float).eps])
+    step = float(np.min(positive_diffs)) if len(positive_diffs) else 0.5
+
+    st.sidebar.markdown(f"**{title}**")
+    minus_col, slider_col, plus_col = st.sidebar.columns([1, 5, 1])
+
+    if minus_col.button("−", key=f"{button_prefix}_minus", use_container_width=True):
+        st.session_state[state_key] = move_to_adjacent_vg(
+            st.session_state[state_key], active_df, -1
+        )
+        st.rerun()
+
+    slider_col.slider(
+        slider_label,
+        min_value=float(values.min()),
+        max_value=float(values.max()),
+        step=step,
+        key=state_key,
+        label_visibility="collapsed",
+    )
+
+    # 슬라이더가 실제 Vg 사이 값에 놓이면 가장 가까운 실제 데이터로 snap
+    current = float(st.session_state[state_key])
+    nearest = int(np.argmin(np.abs(values - current)))
+    snapped = float(values[nearest])
+    if not np.isclose(current, snapped):
+        st.session_state[state_key] = snapped
+
+    if plus_col.button("+", key=f"{button_prefix}_plus", use_container_width=True):
+        st.session_state[state_key] = move_to_adjacent_vg(
+            st.session_state[state_key], active_df, +1
+        )
+        st.rerun()
+
+    return float(st.session_state[state_key])
 
 
 # ============================================================
@@ -440,8 +447,7 @@ if uploaded_file:
             st.stop()
 
         stats = pd.DataFrame(rows)
-        label = "Smoothed" if apply_smoothing else "Raw"
-        st.markdown(f"### 📊 {label} Statistics ({operating_mode})")
+        st.markdown(f"### 📊 Statistics ({operating_mode})")
 
         p = {
             key: stats[key].mean()
@@ -493,57 +499,64 @@ if uploaded_file:
         bwd = res["bwd"]
 
         # ====================================================
+        # Peak point adjustment
+        # ====================================================
+        st.sidebar.markdown("---")
+        st.sidebar.header("Mobility Peak Point Adjustment")
+        st.sidebar.caption(
+            "선택한 Vg 지점의 mobility와 Vth가 큰 카드에 반영됩니다. "
+            "−/+ 버튼은 실제 측정 Vg 한 행씩 이동합니다."
+        )
+
+        peak_f_vg = render_discrete_vg_control(
+            title="Forward peak Vg",
+            slider_label="Forward peak Vg",
+            state_key=keys["peak_slider_fwd"],
+            active_df=fwd,
+            default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+            button_prefix=f"peak_f_{file_id}_{selected_sheet}_{operating_mode}",
+        )
+        peak_b_vg = render_discrete_vg_control(
+            title="Backward peak Vg",
+            slider_label="Backward peak Vg",
+            state_key=keys["peak_slider_bwd"],
+            active_df=bwd,
+            default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+            button_prefix=f"peak_b_{file_id}_{selected_sheet}_{operating_mode}",
+        )
+
+        # peak control 변경값을 즉시 parameter에 반영
+        idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
+        idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
+
+        params = parameter_values(
+            fwd["GateV"], fwd["DrainI_active"], res["gm_fwd"], res["mu_fwd"], idx_f,
+            bwd["GateV"], bwd["DrainI_active"], res["gm_bwd"], res["mu_bwd"], idx_b,
+            operating_mode, W,
+        )
+
+        st.sidebar.caption(
+            f"Fwd μ = {params['mu_fwd']:.3g} cm²/V·s · "
+            f"Bwd μ = {params['mu_bwd']:.3g} cm²/V·s"
+        )
+
+        # ====================================================
         # Manual removal controls
         # ====================================================
         st.sidebar.markdown("---")
         st.sidebar.header("Manual Mobility Point Removal")
         st.sidebar.caption(
-            "Mobility plot에서 제거할 Vg를 선택한 뒤 Remove를 누르세요. "
-            "선택한 행은 모든 plot과 parameter 계산에서 제외됩니다."
+            "제거할 mobility Vg를 선택한 뒤 Remove를 누르세요. "
+            "해당 원래 행은 모든 plot과 parameter 계산에서 제외됩니다."
         )
 
-        step_f = (
-            float(np.median(np.abs(np.diff(fwd["GateV"]))))
-            if len(fwd) > 1 else 0.5
-        )
-        step_b = (
-            float(np.median(np.abs(np.diff(bwd["GateV"]))))
-            if len(bwd) > 1 else 0.5
-        )
-        step_f = step_f if np.isfinite(step_f) and step_f > 0 else 0.5
-        step_b = step_b if np.isfinite(step_b) and step_b > 0 else 0.5
-
-        # 슬라이더 값이 현재 범위 밖이면 안전하게 초기화
-        if keys["remove_slider_fwd"] not in st.session_state:
-            st.session_state[keys["remove_slider_fwd"]] = float(
-                fwd["GateV"].iloc[res["idx_f"]]
-            )
-        else:
-            current = float(st.session_state[keys["remove_slider_fwd"]])
-            if current < float(fwd["GateV"].min()) or current > float(fwd["GateV"].max()):
-                st.session_state[keys["remove_slider_fwd"]] = float(
-                    fwd["GateV"].iloc[res["idx_f"]]
-                )
-
-        if keys["remove_slider_bwd"] not in st.session_state:
-            st.session_state[keys["remove_slider_bwd"]] = float(
-                bwd["GateV"].iloc[res["idx_b"]]
-            )
-        else:
-            current = float(st.session_state[keys["remove_slider_bwd"]])
-            if current < float(bwd["GateV"].min()) or current > float(bwd["GateV"].max()):
-                st.session_state[keys["remove_slider_bwd"]] = float(
-                    bwd["GateV"].iloc[res["idx_b"]]
-                )
-
-        st.sidebar.markdown("**Forward point**")
-        selected_f_vg = st.sidebar.slider(
-            "Forward removal Vg",
-            min_value=float(fwd["GateV"].min()),
-            max_value=float(fwd["GateV"].max()),
-            step=step_f,
-            key=keys["remove_slider_fwd"],
-            label_visibility="collapsed",
+        selected_f_vg = render_discrete_vg_control(
+            title="Forward removal point",
+            slider_label="Forward removal Vg",
+            state_key=keys["remove_slider_fwd"],
+            active_df=fwd,
+            default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+            button_prefix=f"remove_f_{file_id}_{selected_sheet}_{operating_mode}",
         )
         selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
         selected_f_mu = float(res["mu_fwd"][selected_f_idx])
@@ -565,14 +578,13 @@ if uploaded_file:
             st.session_state[keys["removed_fwd"]] = []
             st.rerun()
 
-        st.sidebar.markdown("**Backward point**")
-        selected_b_vg = st.sidebar.slider(
-            "Backward removal Vg",
-            min_value=float(bwd["GateV"].min()),
-            max_value=float(bwd["GateV"].max()),
-            step=step_b,
-            key=keys["remove_slider_bwd"],
-            label_visibility="collapsed",
+        selected_b_vg = render_discrete_vg_control(
+            title="Backward removal point",
+            slider_label="Backward removal Vg",
+            state_key=keys["remove_slider_bwd"],
+            active_df=bwd,
+            default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+            button_prefix=f"remove_b_{file_id}_{selected_sheet}_{operating_mode}",
         )
         selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
         selected_b_mu = float(res["mu_bwd"][selected_b_idx])
@@ -603,12 +615,9 @@ if uploaded_file:
         # ====================================================
         # Parameters: active values only
         # ====================================================
-        params = res["params"]
-        state_label = "Smoothed" if apply_smoothing else "Raw"
-
         st.markdown(
             f"<h3 style='color:#333;'>📊 Data Sheet: {selected_sheet} "
-            f"({operating_mode}, {state_label})</h3>",
+            f"({operating_mode})</h3>",
             unsafe_allow_html=True,
         )
 
@@ -681,7 +690,7 @@ if uploaded_file:
         ), row=1, col=1)
 
         # Gate leakage only in raw mode because manually removed rows no longer align
-        if "GateI" in df.columns and not apply_smoothing and removed_f_count == 0 and removed_b_count == 0:
+        if "GateI" in df.columns and removed_f_count == 0 and removed_b_count == 0:
             ig = pd.to_numeric(df["GateI"], errors="coerce")
             turning = len(res["fwd_raw"]) - 1
             ig_f = ig.iloc[:turning + 1].reset_index(drop=True)
@@ -876,9 +885,6 @@ if uploaded_file:
         st.download_button(
             "Download active analysis (CSV)",
             data=export_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name=(
-                f"{selected_sheet}_{operating_mode}_"
-                f"{'smoothed' if apply_smoothing else 'raw'}_manual_removed.csv"
-            ),
+            file_name=f"{selected_sheet}_{operating_mode}_manual_removed.csv",
             mime="text/csv",
         )
