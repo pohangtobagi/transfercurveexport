@@ -182,6 +182,19 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
     padding-top: 8px !important;
     margin-bottom: 10px !important;
 }
+
+/* v45 stable slider layout */
+.compact-slider-area div[data-testid="stSelectSlider"] {
+    margin-top: 12px !important;
+    margin-bottom: 18px !important;
+}
+.compact-slider-area .slider-heading {
+    margin-bottom: 14px !important;
+}
+.compact-slider-area div[data-testid="stButton"] {
+    margin-top: 10px !important;
+    margin-bottom: 12px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1390,12 +1403,6 @@ def render_discrete_vg_control(
         label_visibility="collapsed",
         format_func=lambda value: f"{value:.2f}",
     )
-    slider_col.markdown(
-        "<div style='font-size:10px;color:#777;text-align:center;"
-        "margin-top:8px;margin-bottom:4px;'>Vgs (V)</div>",
-        unsafe_allow_html=True,
-    )
-
     plus_col.button(
         "+",
         key=f"{button_prefix}_plus",
@@ -1664,14 +1671,6 @@ with main_content:
                 float(bwd["GateV"].iloc[res["mobility_max_idx_b"]]),
             )
             initialize_slider_in_range(
-                keys["remove_slider_fwd"], fwd,
-                float(fwd["GateV"].iloc[res["auto_idx_f"]]),
-            )
-            initialize_slider_in_range(
-                keys["remove_slider_bwd"], bwd,
-                float(bwd["GateV"].iloc[res["auto_idx_b"]]),
-            )
-            initialize_slider_in_range(
                 keys["current_slider_fwd"], fwd,
                 float(fwd["GateV"].iloc[0]),
             )
@@ -1766,8 +1765,47 @@ with main_content:
                 else:
                     off_auto_idx = on_auto_idx
 
-                on_key = f"on_slider_{short}_{file_id}_{selected_sheet}_{operating_mode}"
-                off_key = f"off_slider_{short}_{file_id}_{selected_sheet}_{operating_mode}"
+                on_key = (
+                    f"on_slider_{short}_{file_id}_{selected_sheet}_"
+                    f"{operating_mode}"
+                )
+                off_key = (
+                    f"off_slider_{short}_{file_id}_{selected_sheet}_"
+                    f"{operating_mode}"
+                )
+                remove_key = (
+                    keys["remove_slider_fwd"]
+                    if name == "Forward"
+                    else keys["remove_slider_bwd"]
+                )
+
+                # Keep each direction's controls stable across Forward/Reverse
+                # view changes. Re-auto-detect only when the remaining active
+                # data points actually change (e.g. Peak Elimination / Reset).
+                data_signature = tuple(
+                    int(v) for v in sweep_df["__source_index"].tolist()
+                )
+                signature_key = (
+                    f"active_signature_{short}_{file_id}_"
+                    f"{selected_sheet}_{operating_mode}"
+                )
+                previous_signature = st.session_state.get(signature_key)
+
+                if previous_signature != data_signature:
+                    st.session_state[on_key] = float(
+                        sweep_df["GateV"].iloc[on_auto_idx]
+                    )
+                    st.session_state[off_key] = float(
+                        sweep_df["GateV"].iloc[off_auto_idx]
+                    )
+                    st.session_state[peak_key] = float(
+                        sweep_df["GateV"].iloc[mobility_max_idx]
+                    )
+                    st.session_state[remove_key] = float(
+                        sweep_df["GateV"].iloc[auto_idx]
+                    )
+                    st.session_state[signature_key] = data_signature
+
                 initialize_slider_in_range(
                     on_key,
                     sweep_df,
@@ -1777,6 +1815,16 @@ with main_content:
                     off_key,
                     sweep_df,
                     float(sweep_df["GateV"].iloc[off_auto_idx]),
+                )
+                initialize_slider_in_range(
+                    peak_key,
+                    sweep_df,
+                    peak_default,
+                )
+                initialize_slider_in_range(
+                    remove_key,
+                    sweep_df,
+                    float(sweep_df["GateV"].iloc[auto_idx]),
                 )
 
                 peak_vg = float(st.session_state[peak_key])
@@ -1839,6 +1887,8 @@ with main_content:
                     "ss": ss_value,
                     "on_key": on_key,
                     "off_key": off_key,
+                    "remove_key": remove_key,
+                    "signature_key": signature_key,
                     "on_auto_idx": on_auto_idx,
                     "off_auto_idx": off_auto_idx,
                     "on_idx": on_idx,
@@ -2368,18 +2418,39 @@ with main_content:
             )
             fig.update_xaxes(title_text="Gate Voltage (V)", **common_axis)
             fig.update_yaxes(
-                title_text="Current (A)", type="log", row=1, col=1,
+                title_text="Current (A)",
+                type="log",
+                tickformat=".1e",
+                exponentformat="E",
+                showexponent="all",
+                row=1,
+                col=1,
                 **common_axis,
             )
             fig.update_yaxes(
-                title_text="Mobility (cm²/V·s)", row=1, col=2,
+                title_text="Mobility (cm²/V·s)",
+                row=1,
+                col=2,
                 **common_axis,
             )
             fig.update_yaxes(
-                title_text="Current (A)", row=1, col=3, **common_axis,
+                title_text="Current (A)",
+                tickformat=".1e",
+                exponentformat="E",
+                showexponent="all",
+                row=1,
+                col=3,
+                **common_axis,
             )
             fig.update_yaxes(
-                title_text="SS (mV/dec)", row=1, col=4, **common_axis,
+                title_text="SS (mV/dec)",
+                range=[0, 500000],
+                tickformat=".1e",
+                exponentformat="E",
+                showexponent="all",
+                row=1,
+                col=4,
+                **common_axis,
             )
             fig.update_layout(
                 height=330,
@@ -2650,17 +2721,7 @@ with main_content:
                         active_removed_key,
                         int(removal_row["__source_index"]),
                         active_force_key,
-                        (
-                            active_state["peak_key"],
-                            active_state["on_key"],
-                            active_state["off_key"],
-                            (
-                                keys["current_slider_fwd"]
-                                if selected_direction == "Forward"
-                                else keys["current_slider_bwd"]
-                            ),
-                            active_remove_key,
-                        ),
+                        (),
                     ),
                 )
                 reset_col.button(
@@ -2675,17 +2736,7 @@ with main_content:
                     args=(
                         active_removed_key,
                         active_force_key,
-                        (
-                            active_state["peak_key"],
-                            active_state["on_key"],
-                            active_state["off_key"],
-                            (
-                                keys["current_slider_fwd"]
-                                if selected_direction == "Forward"
-                                else keys["current_slider_bwd"]
-                            ),
-                            active_remove_key,
-                        ),
+                        (),
                     ),
                 )
 
