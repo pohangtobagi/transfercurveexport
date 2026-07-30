@@ -63,21 +63,44 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label {
     margin-bottom: 8px;
 }
 
-/* Compact spacing inside the right control column */
-div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stMarkdownContainer"] p {
-    margin-bottom: 0.2rem;
+/* Compact right control panel */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0.45rem 0.55rem 0.55rem 0.55rem !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] h2 {
+    font-size: 15px !important;
+    line-height: 1.1 !important;
+    margin: 0.1rem 0 0.15rem 0 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] h3 {
+    font-size: 14px !important;
+    line-height: 1.1 !important;
+    margin: 0.1rem 0 0.15rem 0 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] p,
+div[data-testid="stVerticalBlockBorderWrapper"] label p {
+    font-size: 11px !important;
+    line-height: 1.15 !important;
+    margin-bottom: 0.08rem !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stCaptionContainer"] {
+    margin-top: -0.15rem !important;
+    margin-bottom: -0.15rem !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stSlider"] {
-    margin-top: -0.35rem;
-    margin-bottom: -0.45rem;
+    margin-top: -0.45rem !important;
+    margin-bottom: -0.65rem !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] {
-    margin-top: -0.15rem;
-    margin-bottom: -0.25rem;
+    margin-top: -0.15rem !important;
+    margin-bottom: -0.25rem !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] hr {
-    margin-top: 0.45rem;
-    margin-bottom: 0.45rem;
+    margin: 0.32rem 0 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] {
+    margin-top: -0.2rem !important;
+    margin-bottom: -0.25rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -426,7 +449,7 @@ st.sidebar.caption("프로젝트를 생성하거나 선택한 뒤 분석을 진�
 project_name_input = st.sidebar.text_input(
     "New project name",
     key="new_project_name_sidebar",
-    placeholder="예: 85K, Device batch A",
+    placeholder="ex) Name",
 )
 
 if st.sidebar.button("＋ Create Project", use_container_width=True):
@@ -997,9 +1020,8 @@ with device_col:
         "Analysis Controls</div>",
         unsafe_allow_html=True,
     )
-    # Keep the right control area aligned with the central analysis area.
-    # Long controls scroll inside this panel instead of extending the whole page.
-    right_controls = st.container(height=760, border=True)
+    # Compact control panel; no internal scrollbar.
+    right_controls = st.container(border=True)
 
 # Keep the current file active after a log is clicked and across normal reruns.
 if uploaded_file is not None:
@@ -1158,163 +1180,219 @@ with main_content:
                 st.rerun()
 
             # ====================================================
-            # Peak point adjustment
             # ====================================================
-            right_controls.markdown("---")
-            right_controls.header("Mobility Peak Point Adjustment")
-            right_controls.caption(
-                "선택한 Vg 지점의 mobility와 Vth가 큰 카드에 반영됩니다. "
-                "−/+ 버튼은 실제 측정 Vg 한 행씩 이동합니다."
+            # Compact direction-selective analysis controls
+            # ====================================================
+            direction_key = f"control_direction_{file_id}_{selected_sheet}_{operating_mode}"
+            if direction_key not in st.session_state:
+                st.session_state[direction_key] = "Forward"
+
+            control_direction = right_controls.radio(
+                "Sweep direction",
+                ["Forward", "Reverse"],
+                key=direction_key,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            is_forward_control = control_direction == "Forward"
+
+            # Initialize all states so the hidden direction retains its values.
+            initialize_slider_in_range(
+                keys["peak_slider_fwd"],
+                fwd,
+                float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+            )
+            initialize_slider_in_range(
+                keys["peak_slider_bwd"],
+                bwd,
+                float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+            )
+            initialize_slider_in_range(
+                keys["remove_slider_fwd"],
+                fwd,
+                float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+            )
+            initialize_slider_in_range(
+                keys["remove_slider_bwd"],
+                bwd,
+                float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+            )
+            initialize_slider_in_range(
+                keys["current_slider_fwd"],
+                fwd,
+                float(fwd["GateV"].iloc[0]),
+            )
+            initialize_slider_in_range(
+                keys["current_slider_bwd"],
+                bwd,
+                float(bwd["GateV"].iloc[0]),
             )
 
-            peak_f_vg = render_discrete_vg_control(
-                title="Forward peak Vg",
-                slider_label="Forward peak Vg",
-                state_key=keys["peak_slider_fwd"],
-                active_df=fwd,
-                default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
-                button_prefix=f"peak_f_{file_id}_{selected_sheet}_{operating_mode}",
-                parent=right_controls,
+            # ====================================================
+            # Mobility peak point
+            # ====================================================
+            right_controls.markdown("### Mobility Peak Point")
+            active_peak_df = fwd if is_forward_control else bwd
+            active_peak_key = (
+                keys["peak_slider_fwd"] if is_forward_control
+                else keys["peak_slider_bwd"]
             )
-            peak_b_vg = render_discrete_vg_control(
-                title="Backward peak Vg",
-                slider_label="Backward peak Vg",
-                state_key=keys["peak_slider_bwd"],
-                active_df=bwd,
-                default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
-                button_prefix=f"peak_b_{file_id}_{selected_sheet}_{operating_mode}",
+            active_auto_idx = res["auto_idx_f"] if is_forward_control else res["auto_idx_b"]
+            direction_short = "Fwd" if is_forward_control else "Rev"
+
+            active_peak_vg = render_discrete_vg_control(
+                title=f"{control_direction} peak Vg",
+                slider_label=f"{control_direction} peak Vg",
+                state_key=active_peak_key,
+                active_df=active_peak_df,
+                default_value=float(active_peak_df["GateV"].iloc[active_auto_idx]),
+                button_prefix=(
+                    f"peak_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}"
+                ),
                 parent=right_controls,
             )
 
-            # peak control 변경값을 즉시 parameter에 반영
+            peak_f_vg = float(st.session_state[keys["peak_slider_fwd"]])
+            peak_b_vg = float(st.session_state[keys["peak_slider_bwd"]])
             idx_f = int((fwd["GateV"] - peak_f_vg).abs().idxmin())
             idx_b = int((bwd["GateV"] - peak_b_vg).abs().idxmin())
 
             params = parameter_values(
-                fwd["GateV"], fwd["DrainI_active"], res["gm_fwd"], res["mu_fwd"], idx_f,
-                bwd["GateV"], bwd["DrainI_active"], res["gm_bwd"], res["mu_bwd"], idx_b,
+                fwd["GateV"], fwd["DrainI_active"],
+                res["gm_fwd"], res["mu_fwd"], idx_f,
+                bwd["GateV"], bwd["DrainI_active"],
+                res["gm_bwd"], res["mu_bwd"], idx_b,
                 operating_mode, W,
             )
 
+            active_mu = params["mu_fwd"] if is_forward_control else params["mu_bwd"]
             right_controls.caption(
-                f"Fwd μ = {params['mu_fwd']:.3g} cm²/V·s · "
-                f"Bwd μ = {params['mu_bwd']:.3g} cm²/V·s"
+                f"Vg {active_peak_vg:.2f} V · μ {active_mu:.3g} cm²/V·s"
             )
 
-            auto_col_f, auto_col_b = right_controls.columns(2)
-            if auto_col_f.button("Auto Max Fwd", use_container_width=True):
-                st.session_state[keys["force_auto_peak_fwd"]] = True
-                st.rerun()
-            if auto_col_b.button("Auto Max Bwd", use_container_width=True):
-                st.session_state[keys["force_auto_peak_bwd"]] = True
+            if right_controls.button(
+                f"Auto Max {direction_short}",
+                key=f"auto_max_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}",
+                use_container_width=True,
+            ):
+                force_key = (
+                    keys["force_auto_peak_fwd"] if is_forward_control
+                    else keys["force_auto_peak_bwd"]
+                )
+                st.session_state[force_key] = True
                 st.rerun()
 
             # ====================================================
-            # Manual removal controls
+            # Manual mobility point removal
             # ====================================================
             right_controls.markdown("---")
-            right_controls.header("Manual Mobility Point Removal")
-            right_controls.caption(
-                "제거할 mobility Vg를 선택한 뒤 Remove를 누르세요. "
-                "해당 원래 행은 모든 plot과 parameter 계산에서 제외됩니다."
-            )
+            right_controls.markdown("### Manual Point Removal")
 
-            selected_f_vg = render_discrete_vg_control(
-                title="Forward removal point",
-                slider_label="Forward removal Vg",
-                state_key=keys["remove_slider_fwd"],
-                active_df=fwd,
-                default_value=float(fwd["GateV"].iloc[res["auto_idx_f"]]),
-                button_prefix=f"remove_f_{file_id}_{selected_sheet}_{operating_mode}",
+            active_remove_df = fwd if is_forward_control else bwd
+            active_remove_key = (
+                keys["remove_slider_fwd"] if is_forward_control
+                else keys["remove_slider_bwd"]
+            )
+            active_remove_vg = render_discrete_vg_control(
+                title=f"{control_direction} removal Vg",
+                slider_label=f"{control_direction} removal Vg",
+                state_key=active_remove_key,
+                active_df=active_remove_df,
+                default_value=float(active_remove_df["GateV"].iloc[active_auto_idx]),
+                button_prefix=(
+                    f"remove_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}"
+                ),
                 parent=right_controls,
             )
+
+            active_remove_idx, active_remove_row = nearest_row_by_vg(
+                active_remove_df, active_remove_vg
+            )
+            active_mu_array = res["mu_fwd"] if is_forward_control else res["mu_bwd"]
+            active_remove_mu = float(active_mu_array[active_remove_idx])
+            right_controls.caption(
+                f"Vg {active_remove_row['GateV']:.2f} V · "
+                f"μ {active_remove_mu:.3g} cm²/V·s"
+            )
+
+            remove_col, reset_col = right_controls.columns(2)
+            if remove_col.button(
+                f"Remove {direction_short}",
+                key=f"remove_btn_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}",
+                use_container_width=True,
+            ):
+                source_idx = int(active_remove_row["__source_index"])
+                removed_key = (
+                    keys["removed_fwd"] if is_forward_control
+                    else keys["removed_bwd"]
+                )
+                force_key = (
+                    keys["force_auto_peak_fwd"] if is_forward_control
+                    else keys["force_auto_peak_bwd"]
+                )
+                removed = list(st.session_state[removed_key])
+                if source_idx not in removed:
+                    removed.append(source_idx)
+                    st.session_state[removed_key] = removed
+                st.session_state[force_key] = True
+                st.rerun()
+
+            if reset_col.button(
+                f"Reset {direction_short}",
+                key=f"reset_btn_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}",
+                use_container_width=True,
+            ):
+                removed_key = (
+                    keys["removed_fwd"] if is_forward_control
+                    else keys["removed_bwd"]
+                )
+                force_key = (
+                    keys["force_auto_peak_fwd"] if is_forward_control
+                    else keys["force_auto_peak_bwd"]
+                )
+                st.session_state[removed_key] = []
+                st.session_state[force_key] = True
+                st.rerun()
+
+            # Compute both direction removal targets for plotting/saved state.
+            selected_f_vg = float(st.session_state[keys["remove_slider_fwd"]])
+            selected_b_vg = float(st.session_state[keys["remove_slider_bwd"]])
             selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
-            selected_f_mu = float(res["mu_fwd"][selected_f_idx])
-            right_controls.caption(
-                f"Vg = {selected_f_row['GateV']:.2f} V · "
-                f"Mobility = {selected_f_mu:.3g} cm²/V·s"
-            )
-
-            fcol1, fcol2 = right_controls.columns(2)
-            if fcol1.button("Remove Fwd", use_container_width=True):
-                source_idx = int(selected_f_row["__source_index"])
-                removed = list(st.session_state[keys["removed_fwd"]])
-                if source_idx not in removed:
-                    removed.append(source_idx)
-                    st.session_state[keys["removed_fwd"]] = removed
-                st.session_state[keys["force_auto_peak_fwd"]] = True
-                st.rerun()
-
-            if fcol2.button("Reset Fwd", use_container_width=True):
-                st.session_state[keys["removed_fwd"]] = []
-                st.session_state[keys["force_auto_peak_fwd"]] = True
-                st.rerun()
-
-            selected_b_vg = render_discrete_vg_control(
-                title="Backward removal point",
-                slider_label="Backward removal Vg",
-                state_key=keys["remove_slider_bwd"],
-                active_df=bwd,
-                default_value=float(bwd["GateV"].iloc[res["auto_idx_b"]]),
-                button_prefix=f"remove_b_{file_id}_{selected_sheet}_{operating_mode}",
-                parent=right_controls,
-            )
             selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
+            selected_f_mu = float(res["mu_fwd"][selected_f_idx])
             selected_b_mu = float(res["mu_bwd"][selected_b_idx])
-            right_controls.caption(
-                f"Vg = {selected_b_row['GateV']:.2f} V · "
-                f"Mobility = {selected_b_mu:.3g} cm²/V·s"
-            )
-
-            bcol1, bcol2 = right_controls.columns(2)
-            if bcol1.button("Remove Bwd", use_container_width=True):
-                source_idx = int(selected_b_row["__source_index"])
-                removed = list(st.session_state[keys["removed_bwd"]])
-                if source_idx not in removed:
-                    removed.append(source_idx)
-                    st.session_state[keys["removed_bwd"]] = removed
-                st.session_state[keys["force_auto_peak_bwd"]] = True
-                st.rerun()
-
-            if bcol2.button("Reset Bwd", use_container_width=True):
-                st.session_state[keys["removed_bwd"]] = []
-                st.session_state[keys["force_auto_peak_bwd"]] = True
-                st.rerun()
 
             removed_f_count = len(st.session_state[keys["removed_fwd"]])
             removed_b_count = len(st.session_state[keys["removed_bwd"]])
             right_controls.caption(
-                f"Removed: Forward {removed_f_count} · Backward {removed_b_count}"
+                f"Removed · Fwd {removed_f_count} / Rev {removed_b_count}"
             )
 
             # ====================================================
-            # Transfer curve point inspection
+            # Transfer current point
             # ====================================================
             right_controls.markdown("---")
-            right_controls.header("Transfer Current Point")
-            right_controls.caption(
-                "실제 측정 Vg 한 칸씩 이동하며 |DrainI|/Width를 확인합니다."
-            )
+            right_controls.markdown("### Transfer Current Point")
 
-            current_f_vg = render_discrete_vg_control(
-                title="Forward transfer Vg",
-                slider_label="Forward transfer Vg",
-                state_key=keys["current_slider_fwd"],
-                active_df=fwd,
-                default_value=float(fwd["GateV"].iloc[0]),
-                button_prefix=f"current_f_{file_id}_{selected_sheet}_{operating_mode}",
-                parent=right_controls,
+            active_current_df = fwd if is_forward_control else bwd
+            active_current_key = (
+                keys["current_slider_fwd"] if is_forward_control
+                else keys["current_slider_bwd"]
             )
-            current_b_vg = render_discrete_vg_control(
-                title="Backward transfer Vg",
-                slider_label="Backward transfer Vg",
-                state_key=keys["current_slider_bwd"],
-                active_df=bwd,
-                default_value=float(bwd["GateV"].iloc[0]),
-                button_prefix=f"current_b_{file_id}_{selected_sheet}_{operating_mode}",
+            active_current_vg = render_discrete_vg_control(
+                title=f"{control_direction} transfer Vg",
+                slider_label=f"{control_direction} transfer Vg",
+                state_key=active_current_key,
+                active_df=active_current_df,
+                default_value=float(active_current_df["GateV"].iloc[0]),
+                button_prefix=(
+                    f"current_{direction_short}_{file_id}_{selected_sheet}_{operating_mode}"
+                ),
                 parent=right_controls,
             )
 
+            current_f_vg = float(st.session_state[keys["current_slider_fwd"]])
+            current_b_vg = float(st.session_state[keys["current_slider_bwd"]])
             current_f_idx, current_f_row, current_f_density = current_density_at_vg(
                 fwd, current_f_vg, W
             )
@@ -1322,12 +1400,13 @@ with main_content:
                 bwd, current_b_vg, W
             )
 
+            active_density = (
+                current_f_density if is_forward_control else current_b_density
+            )
             right_controls.caption(
-                f"Fwd: {sci_plain(current_f_density)} A/μm · "
-                f"Bwd: {sci_plain(current_b_density)} A/μm"
+                f"|Id|/W = {sci_plain(active_density)} A/μm"
             )
 
-            # ====================================================
             # Central analysis layout: parameters left, plots right
             # ====================================================
             parameter_panel, plot_panel = st.columns([1.05, 1.55], gap="large")
