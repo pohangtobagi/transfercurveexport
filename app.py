@@ -162,6 +162,26 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
     font-size: 17px !important;
     margin-bottom: 7px !important;
 }
+
+/* v44 slider spacing */
+.compact-slider-area {
+    margin-top: -8px !important;
+}
+.compact-slider-area div[data-testid="stSelectSlider"] {
+    margin-top: 8px !important;
+    margin-bottom: 12px !important;
+}
+.compact-slider-area div[data-testid="stHorizontalBlock"] {
+    gap: 0.65rem !important;
+}
+.compact-slider-area div[data-testid="stButton"] {
+    margin-top: 7px !important;
+    margin-bottom: 10px !important;
+}
+.slider-heading {
+    padding-top: 8px !important;
+    margin-bottom: 10px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1093,33 +1113,36 @@ def standardize_measurement_columns(df):
     return df.rename(columns=rename_map)
 
 
-def extract_drain_v_from_calc(xls, selected_sheet=None):
-    """Read Drain V from the selected sheet's condition region in Calc.
+def extract_drain_v_from_settings(xls, selected_sheet=None):
+    """Read Drain V from the selected sheet's condition region in Settings.
 
     Procedure:
-    1) Find the selected sheet's block in Calc.
+    1) Find the selected sheet's block in Settings.
     2) In column A of that block, find the row labeled 'Name'.
     3) In that same row, find the column labeled 'DrainV'.
     4) In column A, find the row labeled 'Start/Level'.
     5) Return the cell at the intersection of the DrainV column and
        Start/Level row.
     """
-    calc_sheet = next(
-        (name for name in xls.sheet_names if name.strip().lower() == "calc"),
+    settings_sheet = next(
+        (
+            name for name in xls.sheet_names
+            if name.strip().lower() == "settings"
+        ),
         None,
     )
-    if calc_sheet is None:
+    if settings_sheet is None:
         return None
 
     try:
-        raw = xls.parse(calc_sheet, header=None)
+        raw = xls.parse(settings_sheet, header=None)
     except Exception:
         return None
 
     rows, cols = raw.shape
     selected_norm = normalize_excel_label(selected_sheet or "")
 
-    # Find selected sheet anchors anywhere in Calc.
+    # Find selected sheet anchors anywhere in Settings.
     anchors = []
     if selected_norm:
         for r in range(rows):
@@ -1203,23 +1226,41 @@ def analyze_sheet(df, file_id, sheet_name):
         operating_mode, W, L, Cox, vd
     )
 
-    # 현재 active mobility에서 자동 최대점 탐색
+    # Peak Elimination target: strongest isolated local anomaly.
     auto_idx_f = auto_peak_index(mu_fwd)
     auto_idx_b = auto_peak_index(mu_bwd)
 
-    # 최초 실행 또는 Remove/Reset 직후에는 현재 mobility의 실제 최대점으로 강제 재설정
+    # Mobility Auto Set/default: maximum finite mobility in the current
+    # active data after all eliminated points have been removed.
+    finite_mu_f = np.where(np.isfinite(mu_fwd), mu_fwd, -np.inf)
+    finite_mu_b = np.where(np.isfinite(mu_bwd), mu_bwd, -np.inf)
+    mobility_max_idx_f = (
+        int(np.argmax(finite_mu_f))
+        if np.any(np.isfinite(mu_fwd)) else 0
+    )
+    mobility_max_idx_b = (
+        int(np.argmax(finite_mu_b))
+        if np.any(np.isfinite(mu_bwd)) else 0
+    )
+
+    # First run or post-elimination rerun resets mobility selection to
+    # the current maximum mobility point.
     if (
         keys["peak_slider_fwd"] not in st.session_state
         or st.session_state.get(keys["force_auto_peak_fwd"], False)
     ):
-        st.session_state[keys["peak_slider_fwd"]] = float(fwd["GateV"].iloc[auto_idx_f])
+        st.session_state[keys["peak_slider_fwd"]] = float(
+            fwd["GateV"].iloc[mobility_max_idx_f]
+        )
         st.session_state[keys["force_auto_peak_fwd"]] = False
 
     if (
         keys["peak_slider_bwd"] not in st.session_state
         or st.session_state.get(keys["force_auto_peak_bwd"], False)
     ):
-        st.session_state[keys["peak_slider_bwd"]] = float(bwd["GateV"].iloc[auto_idx_b])
+        st.session_state[keys["peak_slider_bwd"]] = float(
+            bwd["GateV"].iloc[mobility_max_idx_b]
+        )
         st.session_state[keys["force_auto_peak_bwd"]] = False
 
     peak_target_f = float(st.session_state[keys["peak_slider_fwd"]])
@@ -1253,6 +1294,8 @@ def analyze_sheet(df, file_id, sheet_name):
         "idx_b": idx_b,
         "auto_idx_f": auto_idx_f,
         "auto_idx_b": auto_idx_b,
+        "mobility_max_idx_f": mobility_max_idx_f,
+        "mobility_max_idx_b": mobility_max_idx_b,
         "params": params,
     }
 
@@ -1346,6 +1389,11 @@ def render_discrete_vg_control(
         key=state_key,
         label_visibility="collapsed",
         format_func=lambda value: f"{value:.2f}",
+    )
+    slider_col.markdown(
+        "<div style='font-size:10px;color:#777;text-align:center;"
+        "margin-top:8px;margin-bottom:4px;'>Vgs (V)</div>",
+        unsafe_allow_html=True,
     )
 
     plus_col.button(
@@ -1530,17 +1578,17 @@ with main_content:
                 st.stop()
 
             if "DrainV" not in df.columns:
-                calc_drain_v = extract_drain_v_from_calc(xls, selected_sheet)
-                if calc_drain_v is None:
+                settings_drain_v = extract_drain_v_from_settings(xls, selected_sheet)
+                if settings_drain_v is None:
                     st.error(
-                        "선택한 시트에 DrainV가 없고 Calc 시트에서도 "
+                        "선택한 시트에 DrainV가 없고 Settings 시트에서도 "
                         "Drain V 값을 찾지 못했습니다."
                     )
                     st.stop()
-                df["DrainV"] = float(calc_drain_v)
+                df["DrainV"] = float(settings_drain_v)
                 st.caption(
-                    f"Drain V = {calc_drain_v:g} V "
-                    f"(Calc 시트에서 불러옴)"
+                    f"Drain V = {settings_drain_v:g} V "
+                    f"(Settings 시트에서 불러옴)"
                 )
 
             # Apply saved state before analysis so removed points and selected peaks
@@ -1609,11 +1657,11 @@ with main_content:
             # ====================================================
             initialize_slider_in_range(
                 keys["peak_slider_fwd"], fwd,
-                float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+                float(fwd["GateV"].iloc[res["mobility_max_idx_f"]]),
             )
             initialize_slider_in_range(
                 keys["peak_slider_bwd"], bwd,
-                float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+                float(bwd["GateV"].iloc[res["mobility_max_idx_b"]]),
             )
             initialize_slider_in_range(
                 keys["remove_slider_fwd"], fwd,
@@ -1677,8 +1725,19 @@ with main_content:
                     keys["peak_slider_fwd"] if name == "Forward"
                     else keys["peak_slider_bwd"]
                 )
-                peak_default = float(sweep_df["GateV"].iloc[auto_idx])
-                initialize_slider_in_range(peak_key, sweep_df, peak_default)
+                finite_mu = np.where(
+                    np.isfinite(mu_curve), mu_curve, -np.inf
+                )
+                mobility_max_idx = (
+                    int(np.argmax(finite_mu))
+                    if np.any(np.isfinite(mu_curve)) else 0
+                )
+                peak_default = float(
+                    sweep_df["GateV"].iloc[mobility_max_idx]
+                )
+                initialize_slider_in_range(
+                    peak_key, sweep_df, peak_default
+                )
 
                 # Vth is always extracted from the tangent at the mobility-selected Vg.
                 vth_key = None
@@ -2144,21 +2203,20 @@ with main_content:
             )
             for marker_state, symbol, marker_color, row_key in marker_specs:
                 row_data = marker_state[row_key]
-                for col_num in (1, 3):
-                    fig.add_trace(
-                        go.Scatter(
-                            x=[float(row_data["GateV"])],
-                            y=[abs(float(row_data["DrainI_active"]))],
-                            mode="markers",
-                            marker=dict(
-                                symbol=symbol,
-                                size=10,
-                                color=marker_color,
-                            ),
-                            showlegend=False,
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(row_data["GateV"])],
+                        y=[abs(float(row_data["DrainI_active"]))],
+                        mode="markers",
+                        marker=dict(
+                            symbol=symbol,
+                            size=10,
+                            color=marker_color,
                         ),
-                        row=1, col=col_num,
-                    )
+                        showlegend=False,
+                    ),
+                    row=1, col=1,
+                )
 
             # Mobility curves and independently selected peak lines.
             fig.add_trace(
@@ -2596,6 +2654,11 @@ with main_content:
                             active_state["peak_key"],
                             active_state["on_key"],
                             active_state["off_key"],
+                            (
+                                keys["current_slider_fwd"]
+                                if selected_direction == "Forward"
+                                else keys["current_slider_bwd"]
+                            ),
                             active_remove_key,
                         ),
                     ),
@@ -2616,6 +2679,11 @@ with main_content:
                             active_state["peak_key"],
                             active_state["on_key"],
                             active_state["off_key"],
+                            (
+                                keys["current_slider_fwd"]
+                                if selected_direction == "Forward"
+                                else keys["current_slider_bwd"]
+                            ),
                             active_remove_key,
                         ),
                     ),
