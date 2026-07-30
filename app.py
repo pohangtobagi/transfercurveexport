@@ -29,6 +29,20 @@ div[data-testid="stSlider"] div[role="slider"] > div {
     color: var(--text-color) !important;
     background-color: transparent !important;
 }
+
+/* Four aligned parameter regions below the four plots */
+.parameter-region {
+    min-height: 560px;
+}
+.parameter-region div[data-testid="stVerticalBlockBorderWrapper"] {
+    min-height: 230px;
+}
+.parameter-emphasis {
+    font-size: 17px;
+    font-weight: 850;
+    text-align: center;
+    padding: 7px 4px 2px 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1594,10 +1608,14 @@ with main_content:
                     st.session_state["active_file_bytes"] = updated_entry["_file_bytes"]
                     st.session_state["active_file_name"] = uploaded_file.name
                     save_projects_state()
-                    st.success("현재 로그의 변경 사항을 저장했습니다.")
-                    st.rerun()
+                    st.session_state["save_status_message"] = (
+                        "현재 로그의 변경 사항을 저장했습니다."
+                    )
                 else:
                     st.warning("현재 선택된 로그를 찾을 수 없습니다.")
+
+            if st.session_state.get("save_status_message"):
+                st.success(st.session_state.pop("save_status_message"))
 
             if st.session_state.pop("add_project_requested", False):
                 log_entry = build_current_log_entry()
@@ -1840,11 +1858,6 @@ with main_content:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            st.markdown(
-                "<h4 style='margin:10px 0 5px 0;'>Overall Parameters</h4>",
-                unsafe_allow_html=True,
-            )
-
             def render_removal_control(state, container, removed_key, remove_key, force_key):
                 with container:
                     st.markdown(
@@ -1899,106 +1912,29 @@ with main_content:
                     )
 
             # ====================================================
-            # Overall parameters
             # ====================================================
-            st.markdown(
-                "<h4 style='margin:8px 0 3px 0;'>Overall Parameters</h4>",
-                unsafe_allow_html=True,
-            )
-
+            # Plot-aligned parameter regions
+            # ====================================================
             ratio_line = (
-                f"ON/OFF Ratio · "
-                f"<span style='color:#2E60AB;font-weight:750;'>"
-                f"Forward {sci(f_state['onoff'])}</span>"
+                f"<div class='parameter-emphasis'>ON/OFF Ratio&nbsp;&nbsp;"
+                f"<span style='color:#2E60AB;'>F {sci(f_state['onoff'])}</span>"
                 f" &nbsp;|&nbsp; "
-                f"<span style='color:#D94B45;font-weight:750;'>"
-                f"Reverse {sci(r_state['onoff'])}</span>"
+                f"<span style='color:#D94B45;'>R {sci(r_state['onoff'])}</span>"
+                f"</div>"
             )
             hysteresis_line = (
-                f"Hysteresis · "
-                f"<span style='color:#5B5F97;font-weight:800;'>"
-                f"{selected_hysteresis:.2f} V</span>"
+                f"<div class='parameter-emphasis'>Hysteresis&nbsp;&nbsp;"
+                f"<span style='color:#5B5F97;'>{selected_hysteresis:.2f} V</span>"
+                f"</div>"
                 if np.isfinite(selected_hysteresis)
-                else "Hysteresis · N/A"
+                else "<div class='parameter-emphasis'>Hysteresis&nbsp;&nbsp;N/A</div>"
             )
 
-            row1 = st.columns([1.15, 1, 1], gap="large")
-            with row1[0]:
-                with st.container(border=True):
-                    st.markdown(
-                        "<div style='font-size:15px; font-weight:750; "
-                        "margin-bottom:4px;'>Mobility (cm²/V·s)</div>",
-                        unsafe_allow_html=True,
-                    )
-                    mob_f_col, mob_r_col = st.columns(2, gap="small")
-                    with mob_f_col:
-                        st.markdown(
-                            f"<div style='color:#2E60AB;font-size:12px;font-weight:700;'>"
-                            f"Forward</div><div style='font-size:20px;font-weight:750;'>"
-                            f"{f_state['mobility']:.2f}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        slider_with_auto(
-                            mob_f_col,
-                            f_state,
-                            f_state["peak_key"],
-                            f_state["peak_default"],
-                            "Forward mobility Vg",
-                            f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                        )
-                        st.markdown(
-                            "<div style='font-size:11px;font-weight:750;margin-top:3px;'>"
-                            "Peak Elimination</div>",
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown('<div class="peak-elimination-box">', unsafe_allow_html=True)
-                        render_removal_control(
-                            f_state,
-                            mob_f_col,
-                            keys["removed_fwd"],
-                            keys["remove_slider_fwd"],
-                            keys["force_auto_peak_fwd"],
-                        )
-                        st.markdown("</div>", unsafe_allow_html=True)
+            parameter_columns = st.columns(4, gap="small")
 
-                    with mob_r_col:
-                        st.markdown(
-                            f"<div style='border-left:1px solid rgba(120,120,120,.35);"
-                            f"padding-left:10px;color:#D94B45;font-size:12px;font-weight:700;'>"
-                            f"Reverse</div><div style='border-left:1px solid rgba(120,120,120,.35);"
-                            f"padding-left:10px;font-size:20px;font-weight:750;'>"
-                            f"{r_state['mobility']:.2f}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        slider_with_auto(
-                            mob_r_col,
-                            r_state,
-                            r_state["peak_key"],
-                            r_state["peak_default"],
-                            "Reverse mobility Vg",
-                            f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                        )
-                        st.markdown(
-                            "<div style='font-size:11px;font-weight:750;margin-top:3px;"
-                            "border-left:1px solid rgba(120,120,120,.35);padding-left:10px;'>"
-                            "Peak Elimination</div>",
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown('<div class="peak-elimination-box">', unsafe_allow_html=True)
-                        render_removal_control(
-                            r_state,
-                            mob_r_col,
-                            keys["removed_bwd"],
-                            keys["remove_slider_bwd"],
-                            keys["force_auto_peak_bwd"],
-                        )
-                        st.markdown("</div>", unsafe_allow_html=True)
-
-            with row1[1]:
-                st.markdown(
-                    f"<div style='font-size:13px;margin:0 0 2px 0;'>{ratio_line}</div>",
-                    unsafe_allow_html=True,
-                )
+            # 1) Transfer (Log): ON / OFF / ON-OFF ratio
+            with parameter_columns[0]:
+                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
                 dual_metric_box(
                     "ON Current / Width (A/μm)",
                     sci(f_state["on_density"]),
@@ -2015,12 +1951,6 @@ with main_content:
                         "Reverse ON Vg",
                         f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
-                )
-
-            with row1[2]:
-                st.markdown(
-                    f"<div style='font-size:13px;margin:0 0 2px 0;'>{ratio_line}</div>",
-                    unsafe_allow_html=True,
                 )
                 dual_metric_box(
                     "OFF Current / Width (A/μm)",
@@ -2039,13 +1969,12 @@ with main_content:
                         f"off_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
+                st.markdown(ratio_line, unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
 
-            row2 = st.columns([1.15, 1, 1], gap="large")
-            with row2[1]:
-                st.markdown(
-                    f"<div style='font-size:13px;margin:0 0 2px 0;'>{hysteresis_line}</div>",
-                    unsafe_allow_html=True,
-                )
+            # 2) Transfer (Linear): Vth / Hysteresis
+            with parameter_columns[1]:
+                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
                 dual_metric_box(
                     "Vₜₕ (V)",
                     f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
@@ -2061,8 +1990,74 @@ with main_content:
                         f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
+                st.markdown(hysteresis_line, unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
 
-            with row2[2]:
+            # 3) Mobility: mobility + peak elimination in one region
+            with parameter_columns[2]:
+                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.markdown(
+                        "<div style='font-size:15px;font-weight:750;"
+                        "margin-bottom:4px;'>Mobility (cm²/V·s)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    mob_f_col, mob_r_col = st.columns(2, gap="small")
+
+                    with mob_f_col:
+                        st.markdown(
+                            f"<div style='color:#2E60AB;font-size:12px;"
+                            f"font-weight:700;'>Forward</div>"
+                            f"<div style='font-size:20px;font-weight:750;'>"
+                            f"{f_state['mobility']:.2f}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        slider_with_auto(
+                            mob_f_col, f_state, f_state["peak_key"],
+                            f_state["peak_default"], "Forward mobility Vg",
+                            f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                        )
+                        st.markdown(
+                            "<div style='font-size:11px;font-weight:750;"
+                            "margin-top:4px;'>Peak Elimination</div>",
+                            unsafe_allow_html=True,
+                        )
+                        render_removal_control(
+                            f_state, mob_f_col, keys["removed_fwd"],
+                            keys["remove_slider_fwd"], keys["force_auto_peak_fwd"],
+                        )
+
+                    with mob_r_col:
+                        st.markdown(
+                            f"<div style='border-left:1px solid rgba(120,120,120,.35);"
+                            f"padding-left:8px;color:#D94B45;font-size:12px;"
+                            f"font-weight:700;'>Reverse</div>"
+                            f"<div style='border-left:1px solid rgba(120,120,120,.35);"
+                            f"padding-left:8px;font-size:20px;font-weight:750;'>"
+                            f"{r_state['mobility']:.2f}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        slider_with_auto(
+                            mob_r_col, r_state, r_state["peak_key"],
+                            r_state["peak_default"], "Reverse mobility Vg",
+                            f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                        )
+                        st.markdown(
+                            "<div style='font-size:11px;font-weight:750;"
+                            "margin-top:4px;border-left:1px solid "
+                            "rgba(120,120,120,.35);padding-left:8px;'>"
+                            "Peak Elimination</div>",
+                            unsafe_allow_html=True,
+                        )
+                        render_removal_control(
+                            r_state, mob_r_col, keys["removed_bwd"],
+                            keys["remove_slider_bwd"], keys["force_auto_peak_bwd"],
+                        )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # 4) SS curve: SS
+            with parameter_columns[3]:
+                st.markdown('<div class="parameter-region">', unsafe_allow_html=True)
                 dual_metric_box(
                     "SS (mV/dec)",
                     f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
@@ -2080,4 +2075,5 @@ with main_content:
                         f"ss_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
+                st.markdown("</div>", unsafe_allow_html=True)
 
