@@ -78,6 +78,17 @@ section[data-testid="stSidebar"] hr {
 div[data-testid="stMainBlockContainer"] div[data-testid="stButton"] button {
     min-height: 30px;
 }
+
+/* Compact Peak Elimination buttons */
+.peak-elimination-box div[data-testid="stButton"] button {
+    min-height: 24px !important;
+    height: 24px !important;
+    padding: 0 0.20rem !important;
+}
+.peak-elimination-box div[data-testid="stButton"] button p {
+    font-size: 9px !important;
+    line-height: 1 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -385,6 +396,14 @@ def restore_log_state(record):
     st.session_state["restored_current_vg_bwd"] = record.get("Selected Backward Vg (V)")
     st.session_state["restored_removed_fwd"] = record.get("_removed_fwd_indices", [])
     st.session_state["restored_removed_bwd"] = record.get("_removed_bwd_indices", [])
+    st.session_state["restored_on_vg_fwd"] = record.get("_on_vg_fwd")
+    st.session_state["restored_on_vg_rev"] = record.get("_on_vg_rev")
+    st.session_state["restored_off_vg_fwd"] = record.get("_off_vg_fwd")
+    st.session_state["restored_off_vg_rev"] = record.get("_off_vg_rev")
+    st.session_state["restored_vth_vg_fwd"] = record.get("_vth_vg_fwd")
+    st.session_state["restored_vth_vg_rev"] = record.get("_vth_vg_rev")
+    st.session_state["restored_ss_vg_fwd"] = record.get("_ss_vg_fwd")
+    st.session_state["restored_ss_vg_rev"] = record.get("_ss_vg_rev")
     st.session_state["restore_pending"] = True
     save_projects_state()
 
@@ -1062,12 +1081,25 @@ if st.session_state.get("restore_error"):
     st.error(st.session_state.pop("restore_error"))
 
 current_project = st.session_state.get("active_log_folder")
-project_info_col, project_add_col = st.columns([5.3, 1.7], gap="small")
+project_info_col, project_save_col, project_add_col = st.columns(
+    [4.8, 1.0, 1.4], gap="small"
+)
 project_info_col.markdown(
-    f"<div style='font-size:22px; font-weight:800; padding-top:2px;'>"
+    f"<div style='font-size:24px; font-weight:850; padding-top:1px;'>"
     f"Project: <b>{current_project or 'None'}</b></div>",
     unsafe_allow_html=True,
 )
+if project_save_col.button(
+    "Save",
+    key="save_active_log_top_global",
+    use_container_width=True,
+    disabled=(
+        current_project is None
+        or st.session_state.get("persistent_active_log_id") is None
+    ),
+):
+    st.session_state["save_current_requested"] = True
+
 if project_add_col.button(
     "Add to Project",
     key="add_project_top_global",
@@ -1230,6 +1262,28 @@ with main_content:
                     st.session_state[pre_keys["current_slider_bwd"]] = float(
                         st.session_state["restored_current_vg_bwd"]
                     )
+
+                restore_key_map = {
+                    f"on_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_on_vg_fwd"),
+                    f"on_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_on_vg_rev"),
+                    f"off_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_off_vg_fwd"),
+                    f"off_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_off_vg_rev"),
+                    f"vth_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_vth_vg_fwd"),
+                    f"vth_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_vth_vg_rev"),
+                    f"ss_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_ss_vg_fwd"),
+                    f"ss_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_ss_vg_rev"),
+                }
+                for restore_key, restore_value in restore_key_map.items():
+                    if restore_value is not None:
+                        st.session_state[restore_key] = float(restore_value)
 
                 st.session_state["restore_pending"] = False
 
@@ -1460,16 +1514,16 @@ with main_content:
                 unsafe_allow_html=True,
             )
 
-            if st.session_state.pop("add_project_requested", False):
+            def build_current_log_entry(log_id=None):
                 try:
                     uploaded_file.seek(0)
                     saved_file_bytes = uploaded_file.read()
                     uploaded_file.seek(0)
                 except Exception:
                     saved_file_bytes = None
-    
-                log_entry = {
-                    "_log_id": str(uuid.uuid4()),
+
+                return {
+                    "_log_id": log_id or str(uuid.uuid4()),
                     "_file_bytes": saved_file_bytes,
                     "_removed_fwd_indices": list(
                         st.session_state[keys["removed_fwd"]]
@@ -1477,6 +1531,14 @@ with main_content:
                     "_removed_bwd_indices": list(
                         st.session_state[keys["removed_bwd"]]
                     ),
+                    "_on_vg_fwd": float(f_state["on_row"]["GateV"]),
+                    "_on_vg_rev": float(r_state["on_row"]["GateV"]),
+                    "_off_vg_fwd": float(f_state["off_row"]["GateV"]),
+                    "_off_vg_rev": float(r_state["off_row"]["GateV"]),
+                    "_vth_vg_fwd": float(f_state["vth_vg"]),
+                    "_vth_vg_rev": float(r_state["vth_vg"]),
+                    "_ss_vg_fwd": float(f_state["ss_vg"]),
+                    "_ss_vg_rev": float(r_state["ss_vg"]),
                     "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "File": uploaded_file.name,
                     "Sheet": selected_sheet,
@@ -1507,24 +1569,49 @@ with main_content:
                     "Backward ON current / Width (A/μm)": float(r_state["on_density"]),
                     "Backward OFF current / Width (A/μm)": float(r_state["off_density"]),
                     "Hysteresis (V)": float(selected_hysteresis),
-                    # Legacy export fields use forward values.
                     "ON/OFF ratio": float(f_state["onoff"]),
                     "ON current / Width (A/μm)": float(f_state["on_density"]),
                     "OFF current / Width (A/μm)": float(f_state["off_density"]),
                     "Selected Forward Vg (V)": float(f_state["on_row"]["GateV"]),
                     "Selected Backward Vg (V)": float(r_state["on_row"]["GateV"]),
                 }
+
+            if st.session_state.pop("save_current_requested", False):
+                active_id = st.session_state.get("persistent_active_log_id")
+                records = st.session_state["analysis_log_folders"].get(
+                    current_project, []
+                )
+                active_index = next(
+                    (
+                        i for i, record in enumerate(records)
+                        if record.get("_log_id") == active_id
+                    ),
+                    None,
+                )
+                if active_index is not None:
+                    updated_entry = build_current_log_entry(active_id)
+                    records[active_index] = updated_entry
+                    st.session_state["active_file_bytes"] = updated_entry["_file_bytes"]
+                    st.session_state["active_file_name"] = uploaded_file.name
+                    save_projects_state()
+                    st.success("현재 로그의 변경 사항을 저장했습니다.")
+                    st.rerun()
+                else:
+                    st.warning("현재 선택된 로그를 찾을 수 없습니다.")
+
+            if st.session_state.pop("add_project_requested", False):
+                log_entry = build_current_log_entry()
                 st.session_state["analysis_log_folders"][current_project].append(
                     log_entry
                 )
                 st.session_state["active_log_folder"] = current_project
                 st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
-                st.session_state["active_file_bytes"] = saved_file_bytes
+                st.session_state["active_file_bytes"] = log_entry["_file_bytes"]
                 st.session_state["active_file_name"] = uploaded_file.name
                 save_projects_state()
                 st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
                 st.rerun()
-    
+
             def slider_with_auto(container, state, key_name, default_value, label, prefix):
                 render_discrete_vg_control(
                     title="",
@@ -1710,11 +1797,19 @@ with main_content:
                         ),
                         row=1, col=2,
                     )
-                fig.add_vline(
-                    x=state["vth_vg"],
-                    line_dash="dot",
-                    line_width=1.0,
-                    line_color=state["color"],
+                fig.add_trace(
+                    go.Scatter(
+                        x=[state["vth_vg"]],
+                        y=[abs(float(state["df"]["DrainI_active"].iloc[idx]))],
+                        mode="markers",
+                        marker=dict(
+                            size=9,
+                            color=state["color"],
+                            symbol="circle",
+                            line=dict(width=1, color="white"),
+                        ),
+                        showlegend=False,
+                    ),
                     row=1, col=2,
                 )
 
@@ -1774,9 +1869,9 @@ with main_content:
                         parent=container,
                     )
                     _, removal_row = nearest_row_by_vg(state["df"], removal_vg)
-                    remove_col, reset_col = container.columns(2)
+                    remove_col, reset_col = container.columns([1, 1], gap="small")
                     remove_col.button(
-                        "Remove",
+                        "Rm",
                         key=(
                             f"remove_inline_btn_{state['short']}_{file_id}_"
                             f"{selected_sheet}_{operating_mode}"
@@ -1790,7 +1885,7 @@ with main_content:
                         ),
                     )
                     reset_col.button(
-                        "Reset",
+                        "Rst",
                         key=(
                             f"reset_inline_btn_{state['short']}_{file_id}_"
                             f"{selected_sheet}_{operating_mode}"
@@ -1803,31 +1898,107 @@ with main_content:
                         f"Removed: {len(st.session_state.get(removed_key, []))}"
                     )
 
-            # First row: Mobility / ON-OFF / ON / OFF
-            row1 = st.columns(4, gap="medium")
+            # ====================================================
+            # Overall parameters
+            # ====================================================
+            st.markdown(
+                "<h4 style='margin:8px 0 3px 0;'>Overall Parameters</h4>",
+                unsafe_allow_html=True,
+            )
+
+            ratio_line = (
+                f"ON/OFF Ratio · "
+                f"<span style='color:#2E60AB;font-weight:750;'>"
+                f"Forward {sci(f_state['onoff'])}</span>"
+                f" &nbsp;|&nbsp; "
+                f"<span style='color:#D94B45;font-weight:750;'>"
+                f"Reverse {sci(r_state['onoff'])}</span>"
+            )
+            hysteresis_line = (
+                f"Hysteresis · "
+                f"<span style='color:#5B5F97;font-weight:800;'>"
+                f"{selected_hysteresis:.2f} V</span>"
+                if np.isfinite(selected_hysteresis)
+                else "Hysteresis · N/A"
+            )
+
+            row1 = st.columns([1.15, 1, 1], gap="large")
             with row1[0]:
-                dual_metric_box(
-                    "Mobility (cm²/V·s)",
-                    f"{f_state['mobility']:.2f}",
-                    f"{r_state['mobility']:.2f}",
-                    renderer_f=lambda c: slider_with_auto(
-                        c, f_state, f_state["peak_key"], f_state["peak_default"],
-                        "Forward mobility Vg",
-                        f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                    renderer_r=lambda c: slider_with_auto(
-                        c, r_state, r_state["peak_key"], r_state["peak_default"],
-                        "Reverse mobility Vg",
-                        f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
-                    ),
-                )
+                with st.container(border=True):
+                    st.markdown(
+                        "<div style='font-size:15px; font-weight:750; "
+                        "margin-bottom:4px;'>Mobility (cm²/V·s)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    mob_f_col, mob_r_col = st.columns(2, gap="small")
+                    with mob_f_col:
+                        st.markdown(
+                            f"<div style='color:#2E60AB;font-size:12px;font-weight:700;'>"
+                            f"Forward</div><div style='font-size:20px;font-weight:750;'>"
+                            f"{f_state['mobility']:.2f}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        slider_with_auto(
+                            mob_f_col,
+                            f_state,
+                            f_state["peak_key"],
+                            f_state["peak_default"],
+                            "Forward mobility Vg",
+                            f"mobility_fwd_{file_id}_{selected_sheet}_{operating_mode}",
+                        )
+                        st.markdown(
+                            "<div style='font-size:11px;font-weight:750;margin-top:3px;'>"
+                            "Peak Elimination</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown('<div class="peak-elimination-box">', unsafe_allow_html=True)
+                        render_removal_control(
+                            f_state,
+                            mob_f_col,
+                            keys["removed_fwd"],
+                            keys["remove_slider_fwd"],
+                            keys["force_auto_peak_fwd"],
+                        )
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                    with mob_r_col:
+                        st.markdown(
+                            f"<div style='border-left:1px solid rgba(120,120,120,.35);"
+                            f"padding-left:10px;color:#D94B45;font-size:12px;font-weight:700;'>"
+                            f"Reverse</div><div style='border-left:1px solid rgba(120,120,120,.35);"
+                            f"padding-left:10px;font-size:20px;font-weight:750;'>"
+                            f"{r_state['mobility']:.2f}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        slider_with_auto(
+                            mob_r_col,
+                            r_state,
+                            r_state["peak_key"],
+                            r_state["peak_default"],
+                            "Reverse mobility Vg",
+                            f"mobility_rev_{file_id}_{selected_sheet}_{operating_mode}",
+                        )
+                        st.markdown(
+                            "<div style='font-size:11px;font-weight:750;margin-top:3px;"
+                            "border-left:1px solid rgba(120,120,120,.35);padding-left:10px;'>"
+                            "Peak Elimination</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown('<div class="peak-elimination-box">', unsafe_allow_html=True)
+                        render_removal_control(
+                            r_state,
+                            mob_r_col,
+                            keys["removed_bwd"],
+                            keys["remove_slider_bwd"],
+                            keys["force_auto_peak_bwd"],
+                        )
+                        st.markdown("</div>", unsafe_allow_html=True)
+
             with row1[1]:
-                dual_metric_box(
-                    "ON/OFF Ratio",
-                    sci(f_state["onoff"]),
-                    sci(r_state["onoff"]),
+                st.markdown(
+                    f"<div style='font-size:13px;margin:0 0 2px 0;'>{ratio_line}</div>",
+                    unsafe_allow_html=True,
                 )
-            with row1[2]:
                 dual_metric_box(
                     "ON Current / Width (A/μm)",
                     sci(f_state["on_density"]),
@@ -1845,7 +2016,12 @@ with main_content:
                         f"on_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
-            with row1[3]:
+
+            with row1[2]:
+                st.markdown(
+                    f"<div style='font-size:13px;margin:0 0 2px 0;'>{ratio_line}</div>",
+                    unsafe_allow_html=True,
+                )
                 dual_metric_box(
                     "OFF Current / Width (A/μm)",
                     sci(f_state["off_density"]),
@@ -1864,47 +2040,12 @@ with main_content:
                     ),
                 )
 
-            # Second row: Peak elimination / Hysteresis / Vth / SS
-            row2 = st.columns(4, gap="medium")
-            with row2[0]:
-                with st.container(border=True):
-                    st.markdown(
-                        "<div style='font-size:15px; font-weight:750; "
-                        "margin-bottom:5px;'>Peak Elimination</div>",
-                        unsafe_allow_html=True,
-                    )
-                    remove_f_col, remove_r_col = st.columns(2, gap="small")
-                    render_removal_control(
-                        f_state,
-                        remove_f_col,
-                        keys["removed_fwd"],
-                        keys["remove_slider_fwd"],
-                        keys["force_auto_peak_fwd"],
-                    )
-                    render_removal_control(
-                        r_state,
-                        remove_r_col,
-                        keys["removed_bwd"],
-                        keys["remove_slider_bwd"],
-                        keys["force_auto_peak_bwd"],
-                    )
+            row2 = st.columns([1.15, 1, 1], gap="large")
             with row2[1]:
-                with st.container(border=True):
-                    st.markdown(
-                        "<div style='font-size:15px; font-weight:750;'>Hysteresis (V)</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(
-                        f"<div style='font-size:22px; font-weight:750; color:#5B5F97;'>"
-                        f"{selected_hysteresis:.2f}</div>"
-                        if np.isfinite(selected_hysteresis)
-                        else "<div style='font-size:22px; font-weight:750;'>N/A</div>",
-                        unsafe_allow_html=True,
-                    )
-                    h1, h2 = st.columns(2)
-                    h1.caption(f"Forward Vth: {f_state['vth']:.2f} V")
-                    h2.caption(f"Reverse Vth: {r_state['vth']:.2f} V")
-            with row2[2]:
+                st.markdown(
+                    f"<div style='font-size:13px;margin:0 0 2px 0;'>{hysteresis_line}</div>",
+                    unsafe_allow_html=True,
+                )
                 dual_metric_box(
                     "Vₜₕ (V)",
                     f"{f_state['vth']:.2f}" if np.isfinite(f_state["vth"]) else "N/A",
@@ -1920,7 +2061,8 @@ with main_content:
                         f"vth_rev_{file_id}_{selected_sheet}_{operating_mode}",
                     ),
                 )
-            with row2[3]:
+
+            with row2[2]:
                 dual_metric_box(
                     "SS (mV/dec)",
                     f"{f_state['ss']:.1f}" if np.isfinite(f_state["ss"]) else "N/A",
