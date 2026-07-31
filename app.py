@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -624,6 +624,9 @@ def restore_log_state(record, folder_name=None):
     )
     st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["active_file_bytes"] = file_bytes
+    # Ignore any stale file that remains visible in the uploader after a log
+    # is opened. The opened log becomes the authoritative file source.
+    st.session_state["active_file_source"] = "log"
     st.session_state["restored_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["restored_file_bytes"] = file_bytes
     st.session_state["restored_sheet"] = record.get("Sheet")
@@ -1652,6 +1655,17 @@ def render_discrete_vg_control(
 # Upload
 # ============================================================
 
+def activate_uploaded_file_source():
+    """Switch to uploader data only after the uploader actually changes."""
+    st.session_state["active_file_source"] = "upload"
+
+
+if "active_file_source" not in st.session_state:
+    st.session_state["active_file_source"] = (
+        "log" if st.session_state.get("active_file_bytes") else "upload"
+    )
+
+
 if st.session_state.get("restore_error"):
     st.error(st.session_state.pop("restore_error"))
 
@@ -1682,24 +1696,39 @@ if project_add_col.button(
 ):
     st.session_state["add_project_requested"] = True
 
-uploaded_file = st.file_uploader(
+uploader_value = st.file_uploader(
     "측정된 엑셀 파일을 업로드하세요",
     type=["xlsx", "xls"],
+    key="measurement_file_uploader",
+    on_change=activate_uploaded_file_source,
 )
 main_content = st.container()
 
-# Keep the current file active after a log is clicked and across normal reruns.
-if uploaded_file is not None:
+# Resolve exactly one authoritative file source.
+active_source = st.session_state.get("active_file_source", "upload")
+uploaded_file = None
+
+if active_source == "log" and st.session_state.get("active_file_bytes"):
+    restored_buffer = io.BytesIO(st.session_state["active_file_bytes"])
+    restored_buffer.name = st.session_state.get(
+        "active_file_name", "restored.xlsx"
+    )
+    uploaded_file = restored_buffer
+
+elif uploader_value is not None:
+    uploaded_file = uploader_value
     try:
-        uploaded_file.seek(0)
-        current_file_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
+        uploader_value.seek(0)
+        current_file_bytes = uploader_value.read()
+        uploader_value.seek(0)
         st.session_state["active_file_bytes"] = current_file_bytes
         st.session_state["active_file_name"] = getattr(
-            uploaded_file, "name", "uploaded.xlsx"
+            uploader_value, "name", "uploaded.xlsx"
         )
+        st.session_state["active_file_source"] = "upload"
     except Exception:
         pass
+
 elif st.session_state.get("active_file_bytes"):
     restored_buffer = io.BytesIO(st.session_state["active_file_bytes"])
     restored_buffer.name = st.session_state.get(
@@ -2399,12 +2428,24 @@ with main_content:
                 )
 
             def build_current_log_entry(log_id=None):
+                # Save the file currently displayed/analyzed, not a stale file
+                # that may still remain in the uploader widget.
                 try:
                     uploaded_file.seek(0)
                     saved_file_bytes = uploaded_file.read()
                     uploaded_file.seek(0)
                 except Exception:
-                    saved_file_bytes = None
+                    saved_file_bytes = st.session_state.get(
+                        "active_file_bytes"
+                    )
+
+                active_analysis_file_name = getattr(
+                    uploaded_file,
+                    "name",
+                    st.session_state.get(
+                        "active_file_name", "restored.xlsx"
+                    ),
+                )
 
                 return {
                     "_log_id": log_id or str(uuid.uuid4()),
@@ -2450,7 +2491,7 @@ with main_content:
                         st.session_state[r_state["log_remove_key"]]
                     ),
                     "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "File": uploaded_file.name,
+                    "File": active_analysis_file_name,
                     "Sheet": selected_sheet,
                     "Operating mode": operating_mode,
                     "Width (μm)": float(W),
@@ -2531,11 +2572,10 @@ with main_content:
                     ] = updated_entry["_file_bytes"]
                     st.session_state[
                         "active_file_name"
-                    ] = getattr(
-                        uploaded_file,
-                        "name",
-                        updated_entry.get("File", "restored.xlsx"),
+                    ] = updated_entry.get(
+                        "File", "restored.xlsx"
                     )
+                    st.session_state["active_file_source"] = "log"
                     save_projects_state()
                     st.session_state["save_status_message"] = (
                         "현재 화면의 방향과 선택값을 그대로 저장했습니다."
@@ -2557,7 +2597,10 @@ with main_content:
                 st.session_state["active_log_folder"] = current_project
                 st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
                 st.session_state["active_file_bytes"] = log_entry["_file_bytes"]
-                st.session_state["active_file_name"] = uploaded_file.name
+                st.session_state["active_file_name"] = log_entry.get(
+                    "File", "restored.xlsx"
+                )
+                st.session_state["active_file_source"] = "log"
                 save_projects_state()
                 st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
                 st.rerun()
