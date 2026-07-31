@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -217,6 +217,38 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
 }
 .control-section-spacer { height: 18px; }
 .control-placeholder { min-height: 420px; }
+
+/* v48 aligned plot controls */
+.compact-slider-area + div[data-testid="stVerticalBlock"] {
+    width: 100% !important;
+}
+.control-section-spacer {
+    height: 26px !important;
+}
+.control-placeholder {
+    min-height: 390px !important;
+}
+.compact-slider-area div[data-testid="stSelectSlider"] {
+    min-height: 58px !important;
+    margin-top: 10px !important;
+    margin-bottom: 10px !important;
+}
+.compact-slider-area div[data-testid="stNumberInput"] {
+    margin-top: 6px !important;
+    margin-bottom: 10px !important;
+}
+.compact-slider-area div[data-testid="stNumberInput"] input {
+    height: 40px !important;
+    min-height: 40px !important;
+}
+.compact-slider-area div[data-testid="stButton"] button {
+    min-height: 40px !important;
+    height: 40px !important;
+}
+.compact-slider-area .slider-heading {
+    min-height: 25px !important;
+    margin-bottom: 8px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1095,6 +1127,8 @@ def state_keys(file_id, sheet_name, mode):
         "log_remove_slider_bwd": f"log_remove_slider_bwd_{stem}",
         "peak_slider_fwd": f"peak_slider_fwd_{stem}",
         "peak_slider_bwd": f"peak_slider_bwd_{stem}",
+        "ss_slider_fwd": f"ss_slider_fwd_{stem}",
+        "ss_slider_bwd": f"ss_slider_bwd_{stem}",
         "force_auto_peak_fwd": f"force_auto_peak_fwd_{stem}",
         "force_auto_peak_bwd": f"force_auto_peak_bwd_{stem}",
         "current_slider_fwd": f"current_slider_fwd_{stem}",
@@ -1825,8 +1859,14 @@ with main_content:
                     int(np.argmin(finite_ss))
                     if np.any(np.isfinite(ss_values)) else auto_idx
                 )
-                # SS is displayed at its automatic optimum; no manual slider.
-                ss_key = None
+                ss_key = (
+                    keys["ss_slider_fwd"]
+                    if name == "Forward"
+                    else keys["ss_slider_bwd"]
+                )
+                ss_default = float(
+                    sweep_df["GateV"].iloc[ss_auto_idx]
+                )
 
                 abs_current = np.abs(
                     pd.to_numeric(
@@ -1890,6 +1930,7 @@ with main_content:
                     st.session_state[log_remove_key] = float(
                         sweep_df["GateV"].iloc[auto_idx]
                     )
+                    st.session_state[ss_key] = ss_default
                     st.session_state[signature_key] = data_signature
 
                 initialize_slider_in_range(
@@ -1917,6 +1958,11 @@ with main_content:
                     sweep_df,
                     float(sweep_df["GateV"].iloc[auto_idx]),
                 )
+                initialize_slider_in_range(
+                    ss_key,
+                    sweep_df,
+                    ss_default,
+                )
 
                 peak_vg = float(st.session_state[peak_key])
                 peak_idx = int((sweep_df["GateV"] - peak_vg).abs().idxmin())
@@ -1931,7 +1977,13 @@ with main_content:
                     operating_mode,
                 )
 
-                ss_idx = ss_auto_idx
+                ss_target_vg = float(st.session_state[ss_key])
+                ss_idx = int(
+                    (sweep_df["GateV"] - ss_target_vg).abs().idxmin()
+                )
+                st.session_state[ss_key] = float(
+                    sweep_df["GateV"].iloc[ss_idx]
+                )
                 ss_vg = float(sweep_df["GateV"].iloc[ss_idx])
                 ss_value = (
                     float(ss_values[ss_idx])
@@ -1972,6 +2024,7 @@ with main_content:
                     "vth_vg": float(sweep_df["GateV"].iloc[vth_idx]),
                     "vth": vth_value,
                     "ss_key": ss_key,
+                    "ss_default": ss_default,
                     "ss_auto_idx": ss_auto_idx,
                     "ss_idx": ss_idx,
                     "ss_vg": float(sweep_df["GateV"].iloc[ss_idx]),
@@ -2223,24 +2276,8 @@ with main_content:
                 unsafe_allow_html=True,
             )
 
-            top_row_2 = st.columns(4, gap="large")
+            top_row_2 = st.columns(3, gap="large")
             with top_row_2[0]:
-                render_top_parameter(
-                    "Vₜₕ",
-                    (
-                        f"{active_state['vth']:.2f} V"
-                        if np.isfinite(active_state["vth"]) else "N/A"
-                    ),
-                )
-            with top_row_2[1]:
-                render_top_parameter(
-                    "Hysteresis",
-                    (
-                        f"{selected_hysteresis:.2f} V"
-                        if np.isfinite(selected_hysteresis) else "N/A"
-                    ),
-                )
-            with top_row_2[2]:
                 render_top_parameter(
                     "SS Value",
                     (
@@ -2248,8 +2285,22 @@ with main_content:
                         if np.isfinite(active_state["ss"]) else "N/A"
                     ),
                 )
-            with top_row_2[3]:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+            with top_row_2[1]:
+                render_top_parameter(
+                    "Threshold Voltage",
+                    (
+                        f"{active_state['vth']:.2f} V"
+                        if np.isfinite(active_state["vth"]) else "N/A"
+                    ),
+                )
+            with top_row_2[2]:
+                render_top_parameter(
+                    "Hysteresis",
+                    (
+                        f"{selected_hysteresis:.2f} V"
+                        if np.isfinite(selected_hysteresis) else "N/A"
+                    ),
+                )
 
             # ====================================================
             # Four horizontal plots
@@ -2456,94 +2507,34 @@ with main_content:
             )
             for ss_state in (f_state, r_state):
                 if np.isfinite(ss_state["ss"]):
-                    fig.add_hline(
-                        y=ss_state["ss"],
+                    fig.add_vline(
+                        x=ss_state["ss_vg"],
                         line_dash="dot",
-                        line_width=1.5,
-                        line_color=ss_state["color"],
-                        row=1, col=2,
-                    )
-                    fig.add_trace(
-                        go.Scatter(
-                            x=[ss_state["ss_vg"]],
-                            y=[ss_state["ss"]],
-                            mode="markers",
-                            marker=dict(
-                                symbol="x",
-                                size=11,
-                                color=ss_state["color"],
-                                line=dict(width=2, color=ss_state["color"]),
-                            ),
-                            showlegend=False,
+                        line_width=(
+                            1.8
+                            if ss_state["name"] == selected_direction
+                            else 1.2
                         ),
-                        row=1, col=2,
+                        line_color=ss_state["color"],
+                        row=1,
+                        col=2,
                     )
 
-            # Tangents for both directions.
-            for tangent_state in (f_state, r_state):
-                x_all = np.asarray(
-                    tangent_state["df"]["GateV"], dtype=float
-                )
-                y_all = np.abs(
-                    np.asarray(
-                        tangent_state["df"]["DrainI_active"],
-                        dtype=float,
-                    )
-                )
-                tangent_idx = tangent_state["vth_idx"]
-                slope_abs = np.gradient(y_all, x_all)[tangent_idx]
-                tangent_y = (
-                    y_all[tangent_idx]
-                    + slope_abs * (x_all - x_all[tangent_idx])
-                )
-                valid_tangent = (
-                    np.isfinite(tangent_y) & (tangent_y >= 0)
-                )
-                if valid_tangent.sum() >= 2:
-                    fig.add_trace(
-                        go.Scatter(
-                            x=x_all[valid_tangent],
-                            y=tangent_y[valid_tangent],
-                            line=dict(
-                                color=tangent_state["color"],
-                                dash=(
-                                    "dot"
-                                    if tangent_state["name"] == selected_direction
-                                    else "dash"
-                                ),
-                                width=(
-                                    1.8
-                                    if tangent_state["name"] == selected_direction
-                                    else 1.2
-                                ),
-                            ),
-                            showlegend=False,
+            # Threshold-voltage locations for both directions.
+            for vth_state in (f_state, r_state):
+                if np.isfinite(vth_state["vth_vg"]):
+                    fig.add_vline(
+                        x=vth_state["vth_vg"],
+                        line_dash="dot",
+                        line_width=(
+                            1.8
+                            if vth_state["name"] == selected_direction
+                            else 1.2
                         ),
-                        row=1, col=4,
+                        line_color=vth_state["color"],
+                        row=1,
+                        col=4,
                     )
-                fig.add_trace(
-                    go.Scatter(
-                        x=[tangent_state["vth_vg"]],
-                        y=[
-                            abs(
-                                float(
-                                    tangent_state["df"][
-                                        "DrainI_active"
-                                    ].iloc[tangent_idx]
-                                )
-                            )
-                        ],
-                        mode="markers",
-                        marker=dict(
-                            size=9,
-                            color=tangent_state["color"],
-                            symbol="circle",
-                            line=dict(width=1, color="white"),
-                        ),
-                        showlegend=False,
-                    ),
-                    row=1, col=4,
-                )
 
             common_axis = dict(
                 ticks="outside", showline=True, mirror=True, showgrid=True,
@@ -2673,7 +2664,7 @@ with main_content:
                 "<div class='slider-row-gap'></div>",
                 unsafe_allow_html=True,
             )
-            control_columns = st.columns(4, gap="large")
+            control_columns = st.columns([1, 1, 1, 1], gap="large")
 
             active_removed_key = (
                 keys["removed_fwd"]
@@ -2711,7 +2702,7 @@ with main_content:
                     args=(active_removed_key, active_force_key, reset_keys),
                 )
 
-            # Column 1: Transfer Log controls — ON/OFF + Peak Elimination.
+            # Column 1: Transfer Log controls.
             with control_columns[0]:
                 st.markdown(
                     f"<div class='slider-heading' style='color:{direction_color};'>"
@@ -2722,7 +2713,10 @@ with main_content:
                     2, gap="medium"
                 )
                 with on_control_col:
-                    st.markdown("<div class='slider-heading'>ON</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        "<div class='slider-heading'>ON</div>",
+                        unsafe_allow_html=True,
+                    )
                     render_discrete_vg_control(
                         "", "", active_state["on_key"], active_state["df"],
                         float(active_state["df"]["GateV"].iloc[active_state["on_auto_idx"]]),
@@ -2737,7 +2731,10 @@ with main_content:
                         args=(active_state["on_key"], float(active_state["df"]["GateV"].iloc[active_state["on_auto_idx"]])),
                     )
                 with off_control_col:
-                    st.markdown("<div class='slider-heading'>OFF</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        "<div class='slider-heading'>OFF</div>",
+                        unsafe_allow_html=True,
+                    )
                     render_discrete_vg_control(
                         "", "", active_state["off_key"], active_state["df"],
                         float(active_state["df"]["GateV"].iloc[active_state["off_auto_idx"]]),
@@ -2752,8 +2749,14 @@ with main_content:
                         args=(active_state["off_key"], float(active_state["df"]["GateV"].iloc[active_state["off_auto_idx"]])),
                     )
 
-                st.markdown("<div class='control-section-spacer'></div>", unsafe_allow_html=True)
-                st.markdown("<div class='slider-heading'>Peak Elimination</div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div class='control-section-spacer'></div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    "<div class='slider-heading'>Peak Elimination</div>",
+                    unsafe_allow_html=True,
+                )
                 log_remove_vg = render_discrete_vg_control(
                     "", "", active_state["log_remove_key"], active_state["df"],
                     float(active_state["df"]["GateV"].iloc[active_state["auto_idx"]]),
@@ -2767,9 +2770,26 @@ with main_content:
                     (),
                 )
 
-            # Column 2: SS has no slider.
+            # Column 2: SS Value slider.
             with control_columns[1]:
-                st.markdown("<div class='control-placeholder'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div class='slider-heading' style='color:{direction_color};'>"
+                    f"{selected_direction} · SS Value</div>",
+                    unsafe_allow_html=True,
+                )
+                render_discrete_vg_control(
+                    "", "", active_state["ss_key"], active_state["df"],
+                    active_state["ss_default"],
+                    f"active_ss_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    control_columns[1],
+                )
+                control_columns[1].button(
+                    "Auto Set",
+                    key=f"active_ss_auto_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    use_container_width=True,
+                    on_click=set_state_value,
+                    args=(active_state["ss_key"], float(active_state["ss_default"])),
+                )
 
             # Column 3: Mobility + Peak Elimination.
             with control_columns[2]:
@@ -2792,8 +2812,14 @@ with main_content:
                     args=(active_state["peak_key"], float(active_state["peak_default"])),
                 )
 
-                st.markdown("<div class='control-section-spacer'></div>", unsafe_allow_html=True)
-                st.markdown("<div class='slider-heading'>Peak Elimination</div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div class='control-section-spacer'></div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    "<div class='slider-heading'>Peak Elimination</div>",
+                    unsafe_allow_html=True,
+                )
                 mobility_remove_vg = render_discrete_vg_control(
                     "", "", active_state["remove_key"], active_state["df"],
                     float(active_state["df"]["GateV"].iloc[active_state["auto_idx"]]),
@@ -2809,5 +2835,8 @@ with main_content:
 
             # Column 4: Transfer Linear has no independent slider.
             with control_columns[3]:
-                st.markdown("<div class='control-placeholder'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div class='control-placeholder'></div>",
+                    unsafe_allow_html=True,
+                )
 
