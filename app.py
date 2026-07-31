@@ -457,7 +457,8 @@ def remove_mobility_point(
         removed.append(source_idx)
     st.session_state[removed_key] = removed
     st.session_state[force_key] = True
-    # Recalculate every default from the remaining active data on rerun.
+    st.session_state[f"recalc_after_change_{removed_key}"] = True
+    # Recalculate defaults only because the underlying active data changed.
     for selector_key in selector_keys:
         if selector_key:
             st.session_state.pop(selector_key, None)
@@ -466,6 +467,7 @@ def remove_mobility_point(
 def reset_mobility_points(removed_key, force_key, selector_keys=()):
     st.session_state[removed_key] = []
     st.session_state[force_key] = True
+    st.session_state[f"recalc_after_change_{removed_key}"] = True
     for selector_key in selector_keys:
         if selector_key:
             st.session_state.pop(selector_key, None)
@@ -606,8 +608,10 @@ def safe_excel_filename(name):
 initialize_log_state()
 
 
-def restore_log_state(record):
+def restore_log_state(record, folder_name=None):
     """Restore the uploaded file and every saved analysis selection."""
+    if folder_name:
+        st.session_state["active_log_folder"] = folder_name
     file_bytes = record.get("_file_bytes")
     if not file_bytes:
         st.session_state["restore_error"] = "저장된 원본 파일 데이터가 없습니다."
@@ -649,6 +653,30 @@ def restore_log_state(record):
     st.session_state["restored_vth_vg_rev"] = record.get("_vth_vg_rev")
     st.session_state["restored_ss_vg_fwd"] = record.get("_ss_vg_fwd")
     st.session_state["restored_ss_vg_rev"] = record.get("_ss_vg_rev")
+    st.session_state["restored_ss_range_start_fwd"] = record.get(
+        "_ss_range_start_fwd"
+    )
+    st.session_state["restored_ss_range_end_fwd"] = record.get(
+        "_ss_range_end_fwd"
+    )
+    st.session_state["restored_ss_range_start_rev"] = record.get(
+        "_ss_range_start_rev"
+    )
+    st.session_state["restored_ss_range_end_rev"] = record.get(
+        "_ss_range_end_rev"
+    )
+    st.session_state["restored_mobility_remove_vg_fwd"] = record.get(
+        "_mobility_remove_vg_fwd"
+    )
+    st.session_state["restored_mobility_remove_vg_rev"] = record.get(
+        "_mobility_remove_vg_rev"
+    )
+    st.session_state["restored_log_remove_vg_fwd"] = record.get(
+        "_log_remove_vg_fwd"
+    )
+    st.session_state["restored_log_remove_vg_rev"] = record.get(
+        "_log_remove_vg_rev"
+    )
     st.session_state["restore_pending"] = True
     save_projects_state()
 
@@ -662,10 +690,12 @@ def auto_restore_last_log():
     if not active_id:
         return
 
-    for records in st.session_state.get("analysis_log_folders", {}).values():
+    for folder_name, records in st.session_state.get(
+        "analysis_log_folders", {}
+    ).items():
         for record in records:
             if record.get("_log_id") == active_id:
-                restore_log_state(record)
+                restore_log_state(record, folder_name)
                 return
 
 
@@ -824,7 +854,8 @@ if project_names:
                     f"{saved_at}\n저장 당시 분석 상태로 열기"
                 ),
             ):
-                restore_log_state(log_record)
+                restore_log_state(log_record, active_project)
+                save_projects_state()
                 st.rerun()
 
             if log_delete_col.button(
@@ -1541,8 +1572,7 @@ if project_save_col.button(
     key="save_active_log_top_global",
     use_container_width=True,
     disabled=(
-        current_project is None
-        or st.session_state.get("persistent_active_log_id") is None
+        st.session_state.get("persistent_active_log_id") is None
     ),
 ):
     st.session_state["save_current_requested"] = True
@@ -1743,6 +1773,26 @@ with main_content:
                         st.session_state.get("restored_off_vg_fwd"),
                     f"off_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
                         st.session_state.get("restored_off_vg_rev"),
+                    pre_keys["ss_slider_fwd"]:
+                        st.session_state.get("restored_ss_vg_fwd"),
+                    pre_keys["ss_slider_bwd"]:
+                        st.session_state.get("restored_ss_vg_rev"),
+                    pre_keys["ss_range_start_fwd"]:
+                        st.session_state.get("restored_ss_range_start_fwd"),
+                    pre_keys["ss_range_end_fwd"]:
+                        st.session_state.get("restored_ss_range_end_fwd"),
+                    pre_keys["ss_range_start_bwd"]:
+                        st.session_state.get("restored_ss_range_start_rev"),
+                    pre_keys["ss_range_end_bwd"]:
+                        st.session_state.get("restored_ss_range_end_rev"),
+                    pre_keys["remove_slider_fwd"]:
+                        st.session_state.get("restored_mobility_remove_vg_fwd"),
+                    pre_keys["remove_slider_bwd"]:
+                        st.session_state.get("restored_mobility_remove_vg_rev"),
+                    pre_keys["log_remove_slider_fwd"]:
+                        st.session_state.get("restored_log_remove_vg_fwd"),
+                    pre_keys["log_remove_slider_bwd"]:
+                        st.session_state.get("restored_log_remove_vg_rev"),
                 }
                 for restore_key, restore_value in restore_key_map.items():
                     if restore_value is not None:
@@ -1948,19 +1998,16 @@ with main_content:
                 ss_range_signature = (
                     round(raw_ss_start, 12),
                     round(raw_ss_end, 12),
-                    tuple(
-                        int(v)
-                        for v in sweep_df["__source_index"].tolist()
-                    ),
                 )
                 if (
-                    st.session_state.get(ss_range_signature_key)
+                    ss_key in st.session_state
+                    and st.session_state.get(ss_range_signature_key)
                     != ss_range_signature
                 ):
                     st.session_state[ss_key] = ss_default
-                    st.session_state[
-                        ss_range_signature_key
-                    ] = ss_range_signature
+                st.session_state[
+                    ss_range_signature_key
+                ] = ss_range_signature
 
                 abs_current = np.abs(
                     pd.to_numeric(
@@ -1996,19 +2043,31 @@ with main_content:
                     else keys["log_remove_slider_bwd"]
                 )
 
-                # Keep each direction's controls stable across Forward/Reverse
-                # view changes. Re-auto-detect only when the remaining active
-                # data points actually change (e.g. Peak Elimination / Reset).
-                data_signature = tuple(
-                    int(v) for v in sweep_df["__source_index"].tolist()
+                # Direction switching must never reset either sweep's values.
+                # Initialize once, and recalculate only after an actual
+                # Peak Elimination/Reset operation changes the active dataset.
+                removed_key = (
+                    keys["removed_fwd"]
+                    if name == "Forward"
+                    else keys["removed_bwd"]
                 )
-                signature_key = (
-                    f"active_signature_{short}_{file_id}_"
-                    f"{selected_sheet}_{operating_mode}"
+                recalc_key = f"recalc_after_change_{removed_key}"
+                needs_initialization = any(
+                    key not in st.session_state
+                    for key in (
+                        on_key,
+                        off_key,
+                        peak_key,
+                        remove_key,
+                        log_remove_key,
+                        ss_key,
+                    )
                 )
-                previous_signature = st.session_state.get(signature_key)
+                needs_recalculation = bool(
+                    st.session_state.pop(recalc_key, False)
+                )
 
-                if previous_signature != data_signature:
+                if needs_initialization or needs_recalculation:
                     st.session_state[on_key] = float(
                         sweep_df["GateV"].iloc[on_auto_idx]
                     )
@@ -2025,7 +2084,6 @@ with main_content:
                         sweep_df["GateV"].iloc[auto_idx]
                     )
                     st.session_state[ss_key] = ss_default
-                    st.session_state[signature_key] = data_signature
 
                 initialize_slider_in_range(
                     on_key,
@@ -2131,7 +2189,6 @@ with main_content:
                     "off_key": off_key,
                     "remove_key": remove_key,
                     "log_remove_key": log_remove_key,
-                    "signature_key": signature_key,
                     "on_auto_idx": on_auto_idx,
                     "off_auto_idx": off_auto_idx,
                     "on_idx": on_idx,
@@ -2192,6 +2249,7 @@ with main_content:
 
                 return {
                     "_log_id": log_id or str(uuid.uuid4()),
+                    "_project_name": current_project,
                     "_file_bytes": saved_file_bytes,
                     "_removed_fwd_indices": list(
                         st.session_state[keys["removed_fwd"]]
@@ -2207,6 +2265,30 @@ with main_content:
                     "_vth_vg_rev": float(r_state["vth_vg"]),
                     "_ss_vg_fwd": float(f_state["ss_vg"]),
                     "_ss_vg_rev": float(r_state["ss_vg"]),
+                    "_ss_range_start_fwd": float(
+                        st.session_state[f_state["ss_range_start_key"]]
+                    ),
+                    "_ss_range_end_fwd": float(
+                        st.session_state[f_state["ss_range_end_key"]]
+                    ),
+                    "_ss_range_start_rev": float(
+                        st.session_state[r_state["ss_range_start_key"]]
+                    ),
+                    "_ss_range_end_rev": float(
+                        st.session_state[r_state["ss_range_end_key"]]
+                    ),
+                    "_mobility_remove_vg_fwd": float(
+                        st.session_state[f_state["remove_key"]]
+                    ),
+                    "_mobility_remove_vg_rev": float(
+                        st.session_state[r_state["remove_key"]]
+                    ),
+                    "_log_remove_vg_fwd": float(
+                        st.session_state[f_state["log_remove_key"]]
+                    ),
+                    "_log_remove_vg_rev": float(
+                        st.session_state[r_state["log_remove_key"]]
+                    ),
                     "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "File": uploaded_file.name,
                     "Sheet": selected_sheet,
@@ -2245,28 +2327,65 @@ with main_content:
                 }
 
             if st.session_state.pop("save_current_requested", False):
-                active_id = st.session_state.get("persistent_active_log_id")
-                records = st.session_state["analysis_log_folders"].get(
-                    current_project, []
+                active_id = st.session_state.get(
+                    "persistent_active_log_id"
                 )
-                active_index = next(
-                    (
-                        i for i, record in enumerate(records)
-                        if record.get("_log_id") == active_id
-                    ),
-                    None,
-                )
-                if active_index is not None:
+                target_folder = None
+                target_index = None
+
+                # First try the currently selected project.
+                current_records = st.session_state[
+                    "analysis_log_folders"
+                ].get(current_project, [])
+                for index, record in enumerate(current_records):
+                    if record.get("_log_id") == active_id:
+                        target_folder = current_project
+                        target_index = index
+                        break
+
+                # If the project selector changed or was rebuilt during restore,
+                # locate the active log across all projects.
+                if target_index is None:
+                    for folder_name, records in st.session_state[
+                        "analysis_log_folders"
+                    ].items():
+                        for index, record in enumerate(records):
+                            if record.get("_log_id") == active_id:
+                                target_folder = folder_name
+                                target_index = index
+                                break
+                        if target_index is not None:
+                            break
+
+                if target_folder is not None and target_index is not None:
                     updated_entry = build_current_log_entry(active_id)
-                    records[active_index] = updated_entry
-                    st.session_state["active_file_bytes"] = updated_entry["_file_bytes"]
-                    st.session_state["active_file_name"] = uploaded_file.name
+                    st.session_state["analysis_log_folders"][
+                        target_folder
+                    ][target_index] = updated_entry
+                    st.session_state["active_log_folder"] = target_folder
+                    st.session_state[
+                        "persistent_active_log_id"
+                    ] = active_id
+                    st.session_state[
+                        "active_file_bytes"
+                    ] = updated_entry["_file_bytes"]
+                    st.session_state[
+                        "active_file_name"
+                    ] = getattr(
+                        uploaded_file,
+                        "name",
+                        updated_entry.get("File", "restored.xlsx"),
+                    )
                     save_projects_state()
                     st.session_state["save_status_message"] = (
                         "현재 로그의 변경 사항을 저장했습니다."
                     )
+                    st.rerun()
                 else:
-                    st.warning("현재 선택된 로그를 찾을 수 없습니다.")
+                    st.warning(
+                        "활성 로그를 찾지 못했습니다. 로그를 다시 연 뒤 "
+                        "Save를 눌러주세요."
+                    )
 
             if st.session_state.get("save_status_message"):
                 st.success(st.session_state.pop("save_status_message"))
@@ -2374,7 +2493,7 @@ with main_content:
                 unsafe_allow_html=True,
             )
 
-            top_row_2 = st.columns(3, gap="large")
+            top_row_2 = st.columns(4, gap="large")
             with top_row_2[0]:
                 render_top_parameter(
                     "SS Value",
@@ -2399,6 +2518,8 @@ with main_content:
                         if np.isfinite(selected_hysteresis) else "N/A"
                     ),
                 )
+            with top_row_2[3]:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
 
             # ====================================================
             # Four horizontal plots
@@ -2485,18 +2606,24 @@ with main_content:
                         row=1, col=col_num,
                     )
 
-            # ON/OFF locations on Transfer (Log): vertical dotted lines.
+            # ON/OFF locations on Transfer (Log): color by sweep direction.
+            # Forward = blue, Reverse = red for both ON and OFF.
             for marker_state in (f_state, r_state):
                 active_width = (
                     1.8
                     if marker_state["name"] == selected_direction
                     else 1.2
                 )
+                direction_line_color = (
+                    "blue"
+                    if marker_state["name"] == "Forward"
+                    else "red"
+                )
                 fig.add_vline(
                     x=float(marker_state["on_row"]["GateV"]),
                     line_dash="dot",
                     line_width=active_width,
-                    line_color="green",
+                    line_color=direction_line_color,
                     row=1,
                     col=1,
                 )
@@ -2504,7 +2631,7 @@ with main_content:
                     x=float(marker_state["off_row"]["GateV"]),
                     line_dash="dot",
                     line_width=active_width,
-                    line_color="orange",
+                    line_color=direction_line_color,
                     row=1,
                     col=1,
                 )
