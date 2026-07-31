@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
-st.title("FET-Analysis_Minjae")
+st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
+st.title("FET-Analysis_Minjae X Junseong")
 
 st.markdown("""
 <style>
@@ -619,6 +619,9 @@ def restore_log_state(record, folder_name=None):
 
     st.session_state["restored_log_id"] = record.get("_log_id")
     st.session_state["persistent_active_log_id"] = record.get("_log_id")
+    st.session_state["restored_selected_direction"] = record.get(
+        "_selected_direction", "Forward"
+    )
     st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["active_file_bytes"] = file_bytes
     st.session_state["restored_file_name"] = record.get("File", "restored.xlsx")
@@ -1455,34 +1458,91 @@ def initialize_slider_in_range(key, active_df, default_value):
         st.session_state[key] = nearest_value
 
 
-def step_discrete_slider(state_key, active_df, direction, input_key=None):
-    """Move one measured-Vg step and keep the numeric input synchronized."""
+def step_discrete_slider(
+    persistent_key,
+    widget_key,
+    active_df,
+    direction,
+    input_widget_key=None,
+):
+    """Move one measured-Vg step and persist it independently of widget life."""
     values = sorted_unique_vg(active_df)
     if len(values) == 0:
         return
 
-    current = float(st.session_state.get(state_key, values[0]))
+    current = float(st.session_state.get(persistent_key, values[0]))
     nearest = int(np.argmin(np.abs(values - current)))
     target = int(np.clip(nearest + int(direction), 0, len(values) - 1))
     target_value = float(values[target])
-    st.session_state[state_key] = target_value
-    if input_key:
-        st.session_state[input_key] = target_value
+
+    st.session_state[persistent_key] = target_value
+    st.session_state[widget_key] = target_value
+    if input_widget_key:
+        st.session_state[input_widget_key] = target_value
 
 
-def sync_numeric_from_slider(state_key, input_key):
-    st.session_state[input_key] = float(st.session_state[state_key])
+def sync_persistent_from_slider(
+    widget_key,
+    persistent_key,
+    input_widget_key,
+):
+    value = float(st.session_state[widget_key])
+    st.session_state[persistent_key] = value
+    st.session_state[input_widget_key] = value
 
 
-def sync_slider_from_numeric(input_key, state_key, active_df):
+def sync_persistent_from_numeric(
+    input_widget_key,
+    widget_key,
+    persistent_key,
+    active_df,
+):
     values = sorted_unique_vg(active_df)
     if len(values) == 0:
         return
-    requested = float(st.session_state[input_key])
+
+    requested = float(st.session_state[input_widget_key])
     nearest = int(np.argmin(np.abs(values - requested)))
     snapped = float(values[nearest])
-    st.session_state[state_key] = snapped
-    st.session_state[input_key] = snapped
+
+    st.session_state[persistent_key] = snapped
+    st.session_state[widget_key] = snapped
+    st.session_state[input_widget_key] = snapped
+
+
+def sync_persistent_number(widget_key, persistent_key):
+    st.session_state[persistent_key] = float(
+        st.session_state[widget_key]
+    )
+
+
+def render_persistent_number_input(
+    container,
+    label,
+    persistent_key,
+    widget_key,
+    default_value,
+    step=0.1,
+    fmt="%.3f",
+):
+    """Render a number input whose value survives when the widget disappears."""
+    if persistent_key not in st.session_state:
+        st.session_state[persistent_key] = float(default_value)
+
+    # A widget key may have been cleaned up while its direction was hidden.
+    # Always rebuild it from the persistent model value.
+    st.session_state[widget_key] = float(
+        st.session_state[persistent_key]
+    )
+    container.number_input(
+        label,
+        key=widget_key,
+        step=float(step),
+        format=fmt,
+        on_change=sync_persistent_number,
+        args=(widget_key, persistent_key),
+    )
+    return float(st.session_state[persistent_key])
 
 
 def render_discrete_vg_control(
@@ -1494,7 +1554,7 @@ def render_discrete_vg_control(
     button_prefix,
     parent=None,
 ):
-    """Render a measured-Vg slider with step buttons and direct Vg input."""
+    """Measured-Vg slider with direction-persistent model state."""
     initialize_slider_in_range(state_key, active_df, default_value)
 
     values = sorted_unique_vg(active_df)
@@ -1503,9 +1563,21 @@ def render_discrete_vg_control(
 
     options = [float(v) for v in values]
     ui = parent if parent is not None else st.sidebar
-    input_key = f"{button_prefix}_numeric_vg"
-    if input_key not in st.session_state:
-        st.session_state[input_key] = float(st.session_state[state_key])
+
+    # state_key is persistent model state. These two are disposable widget keys.
+    slider_widget_key = f"{button_prefix}_slider_widget"
+    input_widget_key = f"{button_prefix}_numeric_widget"
+
+    persistent_value = float(st.session_state[state_key])
+    nearest = int(np.argmin(np.abs(np.asarray(options) - persistent_value)))
+    persistent_value = float(options[nearest])
+    st.session_state[state_key] = persistent_value
+
+    # Recreate disposable widget state from the persistent value every time the
+    # direction becomes visible again. This prevents stale widget cleanup from
+    # changing Forward/Reverse selections.
+    st.session_state[slider_widget_key] = persistent_value
+    st.session_state[input_widget_key] = persistent_value
 
     minus_col, slider_col, plus_col = ui.columns([1, 5, 1])
 
@@ -1514,17 +1586,27 @@ def render_discrete_vg_control(
         key=f"{button_prefix}_minus",
         use_container_width=True,
         on_click=step_discrete_slider,
-        args=(state_key, active_df, -1, input_key),
+        args=(
+            state_key,
+            slider_widget_key,
+            active_df,
+            -1,
+            input_widget_key,
+        ),
     )
 
     slider_col.select_slider(
         slider_label,
         options=options,
-        key=state_key,
+        key=slider_widget_key,
         label_visibility="collapsed",
         format_func=lambda value: f"{value:.2f}",
-        on_change=sync_numeric_from_slider,
-        args=(state_key, input_key),
+        on_change=sync_persistent_from_slider,
+        args=(
+            slider_widget_key,
+            state_key,
+            input_widget_key,
+        ),
     )
 
     plus_col.button(
@@ -1532,19 +1614,34 @@ def render_discrete_vg_control(
         key=f"{button_prefix}_plus",
         use_container_width=True,
         on_click=step_discrete_slider,
-        args=(state_key, active_df, +1, input_key),
+        args=(
+            state_key,
+            slider_widget_key,
+            active_df,
+            +1,
+            input_widget_key,
+        ),
     )
 
     ui.number_input(
         "Vg input (V)",
-        key=input_key,
+        key=input_widget_key,
         min_value=float(options[0]),
         max_value=float(options[-1]),
-        step=float(np.median(np.diff(options))) if len(options) > 1 else 0.1,
+        step=(
+            float(np.median(np.diff(options)))
+            if len(options) > 1
+            else 0.1
+        ),
         format="%.3f",
         label_visibility="collapsed",
-        on_change=sync_slider_from_numeric,
-        args=(input_key, state_key, active_df),
+        on_change=sync_persistent_from_numeric,
+        args=(
+            input_widget_key,
+            slider_widget_key,
+            state_key,
+            active_df,
+        ),
     )
 
     return float(st.session_state[state_key])
@@ -2225,19 +2322,71 @@ with main_content:
                 f"📊 {selected_sheet} ({operating_mode})</h3>",
                 unsafe_allow_html=True,
             )
+            direction_widget_key = (
+                f"direction_view_{file_id}_{selected_sheet}_"
+                f"{operating_mode}"
+            )
+            restored_direction = st.session_state.pop(
+                "restored_selected_direction", None
+            )
+            if restored_direction in ("Forward", "Reverse"):
+                st.session_state[direction_widget_key] = restored_direction
+            elif direction_widget_key not in st.session_state:
+                st.session_state[direction_widget_key] = "Forward"
+
             selected_direction = header_direction_col.radio(
                 "Direction",
                 ["Forward", "Reverse"],
                 horizontal=True,
-                key=(
-                    f"direction_view_{file_id}_{selected_sheet}_"
-                    f"{operating_mode}"
-                ),
+                key=direction_widget_key,
                 label_visibility="collapsed",
             )
             active_state = (
                 f_state if selected_direction == "Forward" else r_state
             )
+
+            # Persistent model-state regression guard. These keys are not tied
+            # to visible widgets, so repeated Forward/Reverse switching cannot
+            # remove or overwrite the opposite direction's values.
+            for guarded_state in (f_state, r_state):
+                initialize_slider_in_range(
+                    guarded_state["on_key"],
+                    guarded_state["df"],
+                    guarded_state["on_default"],
+                )
+                initialize_slider_in_range(
+                    guarded_state["off_key"],
+                    guarded_state["df"],
+                    guarded_state["off_default"],
+                )
+                initialize_slider_in_range(
+                    guarded_state["peak_key"],
+                    guarded_state["df"],
+                    guarded_state["peak_default"],
+                )
+                initialize_slider_in_range(
+                    guarded_state["ss_key"],
+                    guarded_state["df"],
+                    guarded_state["ss_default"],
+                )
+                initialize_slider_in_range(
+                    guarded_state["remove_key"],
+                    guarded_state["df"],
+                    float(
+                        guarded_state["df"]["GateV"].iloc[
+                            guarded_state["auto_idx"]
+                        ]
+                    ),
+                )
+                initialize_slider_in_range(
+                    guarded_state["log_remove_key"],
+                    guarded_state["df"],
+                    float(
+                        guarded_state["df"]["GateV"].iloc[
+                            guarded_state["auto_idx"]
+                        ]
+                    ),
+                )
 
             def build_current_log_entry(log_id=None):
                 try:
@@ -2250,6 +2399,7 @@ with main_content:
                 return {
                     "_log_id": log_id or str(uuid.uuid4()),
                     "_project_name": current_project,
+                    "_selected_direction": selected_direction,
                     "_file_bytes": saved_file_bytes,
                     "_removed_fwd_indices": list(
                         st.session_state[keys["removed_fwd"]]
@@ -2378,9 +2528,8 @@ with main_content:
                     )
                     save_projects_state()
                     st.session_state["save_status_message"] = (
-                        "현재 로그의 변경 사항을 저장했습니다."
+                        "현재 화면의 방향과 선택값을 그대로 저장했습니다."
                     )
-                    st.rerun()
                 else:
                     st.warning(
                         "활성 로그를 찾지 못했습니다. 로그를 다시 연 뒤 "
@@ -3093,17 +3242,27 @@ with main_content:
                         ),
                     )
                     ss_range_cols = ss_inner.columns(2, gap="small")
-                    ss_range_cols[0].number_input(
+                    render_persistent_number_input(
+                        ss_range_cols[0],
                         "Vgs Start (V)",
-                        key=active_state["ss_range_start_key"],
+                        active_state["ss_range_start_key"],
+                        (
+                            f"ss_start_widget_{selected_direction}_{file_id}_"
+                            f"{selected_sheet}_{operating_mode}"
+                        ),
+                        active_state["ss_range_low"],
                         step=0.1,
-                        format="%.3f",
                     )
-                    ss_range_cols[1].number_input(
+                    render_persistent_number_input(
+                        ss_range_cols[1],
                         "Vgs End (V)",
-                        key=active_state["ss_range_end_key"],
+                        active_state["ss_range_end_key"],
+                        (
+                            f"ss_end_widget_{selected_direction}_{file_id}_"
+                            f"{selected_sheet}_{operating_mode}"
+                        ),
+                        active_state["ss_range_high"],
                         step=0.1,
-                        format="%.3f",
                     )
 
             # Column 3: Mobility + Peak Elimination.
