@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -195,6 +195,28 @@ div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
     margin-top: 10px !important;
     margin-bottom: 12px !important;
 }
+
+/* v47 unified plot-control geometry */
+.compact-slider-area div[data-testid="stSelectSlider"] {
+    min-height: 42px !important;
+    margin-top: 8px !important;
+    margin-bottom: 8px !important;
+}
+.compact-slider-area div[data-testid="stNumberInput"] {
+    margin-top: 4px !important;
+    margin-bottom: 8px !important;
+}
+.compact-slider-area div[data-testid="stNumberInput"] input {
+    height: 30px !important;
+    font-size: 11px !important;
+    padding: 2px 6px !important;
+}
+.compact-slider-area div[data-testid="stButton"] button {
+    height: 32px !important;
+    min-height: 32px !important;
+}
+.control-section-spacer { height: 18px; }
+.control-placeholder { min-height: 420px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1069,6 +1091,8 @@ def state_keys(file_id, sheet_name, mode):
         "removed_bwd": f"removed_bwd_{stem}",
         "remove_slider_fwd": f"remove_slider_fwd_{stem}",
         "remove_slider_bwd": f"remove_slider_bwd_{stem}",
+        "log_remove_slider_fwd": f"log_remove_slider_fwd_{stem}",
+        "log_remove_slider_bwd": f"log_remove_slider_bwd_{stem}",
         "peak_slider_fwd": f"peak_slider_fwd_{stem}",
         "peak_slider_bwd": f"peak_slider_bwd_{stem}",
         "force_auto_peak_fwd": f"force_auto_peak_fwd_{stem}",
@@ -1346,12 +1370,8 @@ def initialize_slider_in_range(key, active_df, default_value):
         st.session_state[key] = nearest_value
 
 
-def step_discrete_slider(state_key, active_df, direction):
-    """
-    버튼 callback 전용.
-    Streamlit widget 생성 이후 직접 값을 바꾸지 않고,
-    callback 내부에서 실제 Vg 한 단계씩 이동한다.
-    """
+def step_discrete_slider(state_key, active_df, direction, input_key=None):
+    """Move one measured-Vg step and keep the numeric input synchronized."""
     values = sorted_unique_vg(active_df)
     if len(values) == 0:
         return
@@ -1359,7 +1379,25 @@ def step_discrete_slider(state_key, active_df, direction):
     current = float(st.session_state.get(state_key, values[0]))
     nearest = int(np.argmin(np.abs(values - current)))
     target = int(np.clip(nearest + int(direction), 0, len(values) - 1))
-    st.session_state[state_key] = float(values[target])
+    target_value = float(values[target])
+    st.session_state[state_key] = target_value
+    if input_key:
+        st.session_state[input_key] = target_value
+
+
+def sync_numeric_from_slider(state_key, input_key):
+    st.session_state[input_key] = float(st.session_state[state_key])
+
+
+def sync_slider_from_numeric(input_key, state_key, active_df):
+    values = sorted_unique_vg(active_df)
+    if len(values) == 0:
+        return
+    requested = float(st.session_state[input_key])
+    nearest = int(np.argmin(np.abs(values - requested)))
+    snapped = float(values[nearest])
+    st.session_state[state_key] = snapped
+    st.session_state[input_key] = snapped
 
 
 def render_discrete_vg_control(
@@ -1371,12 +1409,7 @@ def render_discrete_vg_control(
     button_prefix,
     parent=None,
 ):
-    """
-    − 버튼 | 실제 측정 Vg select_slider | + 버튼
-
-    select_slider options를 실제 남아 있는 Vg 값으로 제한하므로
-    슬라이더가 측정 데이터 간격과 정확히 일치한다.
-    """
+    """Render a measured-Vg slider with step buttons and direct Vg input."""
     initialize_slider_in_range(state_key, active_df, default_value)
 
     values = sorted_unique_vg(active_df)
@@ -1384,8 +1417,11 @@ def render_discrete_vg_control(
         return np.nan
 
     options = [float(v) for v in values]
-
     ui = parent if parent is not None else st.sidebar
+    input_key = f"{button_prefix}_numeric_vg"
+    if input_key not in st.session_state:
+        st.session_state[input_key] = float(st.session_state[state_key])
+
     minus_col, slider_col, plus_col = ui.columns([1, 5, 1])
 
     minus_col.button(
@@ -1393,7 +1429,7 @@ def render_discrete_vg_control(
         key=f"{button_prefix}_minus",
         use_container_width=True,
         on_click=step_discrete_slider,
-        args=(state_key, active_df, -1),
+        args=(state_key, active_df, -1, input_key),
     )
 
     slider_col.select_slider(
@@ -1402,17 +1438,31 @@ def render_discrete_vg_control(
         key=state_key,
         label_visibility="collapsed",
         format_func=lambda value: f"{value:.2f}",
+        on_change=sync_numeric_from_slider,
+        args=(state_key, input_key),
     )
+
     plus_col.button(
         "+",
         key=f"{button_prefix}_plus",
         use_container_width=True,
         on_click=step_discrete_slider,
-        args=(state_key, active_df, +1),
+        args=(state_key, active_df, +1, input_key),
+    )
+
+    ui.number_input(
+        "Vg input (V)",
+        key=input_key,
+        min_value=float(options[0]),
+        max_value=float(options[-1]),
+        step=float(np.median(np.diff(options))) if len(options) > 1 else 0.1,
+        format="%.3f",
+        label_visibility="collapsed",
+        on_change=sync_slider_from_numeric,
+        args=(input_key, state_key, active_df),
     )
 
     return float(st.session_state[state_key])
-
 
 
 
@@ -1714,6 +1764,16 @@ with main_content:
                 bwd,
                 float(bwd["GateV"].iloc[res["auto_idx_b"]]),
             )
+            initialize_slider_in_range(
+                keys["log_remove_slider_fwd"],
+                fwd,
+                float(fwd["GateV"].iloc[res["auto_idx_f"]]),
+            )
+            initialize_slider_in_range(
+                keys["log_remove_slider_bwd"],
+                bwd,
+                float(bwd["GateV"].iloc[res["auto_idx_b"]]),
+            )
 
             selected_f_vg = float(
                 st.session_state[keys["remove_slider_fwd"]]
@@ -1796,6 +1856,11 @@ with main_content:
                     if name == "Forward"
                     else keys["remove_slider_bwd"]
                 )
+                log_remove_key = (
+                    keys["log_remove_slider_fwd"]
+                    if name == "Forward"
+                    else keys["log_remove_slider_bwd"]
+                )
 
                 # Keep each direction's controls stable across Forward/Reverse
                 # view changes. Re-auto-detect only when the remaining active
@@ -1822,6 +1887,9 @@ with main_content:
                     st.session_state[remove_key] = float(
                         sweep_df["GateV"].iloc[auto_idx]
                     )
+                    st.session_state[log_remove_key] = float(
+                        sweep_df["GateV"].iloc[auto_idx]
+                    )
                     st.session_state[signature_key] = data_signature
 
                 initialize_slider_in_range(
@@ -1841,6 +1909,11 @@ with main_content:
                 )
                 initialize_slider_in_range(
                     remove_key,
+                    sweep_df,
+                    float(sweep_df["GateV"].iloc[auto_idx]),
+                )
+                initialize_slider_in_range(
+                    log_remove_key,
                     sweep_df,
                     float(sweep_df["GateV"].iloc[auto_idx]),
                 )
@@ -1906,6 +1979,7 @@ with main_content:
                     "on_key": on_key,
                     "off_key": off_key,
                     "remove_key": remove_key,
+                    "log_remove_key": log_remove_key,
                     "signature_key": signature_key,
                     "on_auto_idx": on_auto_idx,
                     "off_auto_idx": off_auto_idx,
@@ -2189,9 +2263,9 @@ with main_content:
                 cols=4,
                 subplot_titles=(
                     "Transfer (Log)",
+                    "Subthreshold Swing",
                     graph_mobility_title,
                     "Transfer (Linear)",
-                    "Subthreshold Swing",
                 ),
                 horizontal_spacing=0.085,
             )
@@ -2208,7 +2282,7 @@ with main_content:
                 "solid" if selected_direction == "Reverse" else "dash"
             )
 
-            for col_num in (1, 3):
+            for col_num in (1, 4):
                 fig.add_trace(
                     go.Scatter(
                         x=vg_fwd,
@@ -2236,7 +2310,7 @@ with main_content:
                 ig_b = gate_i.iloc[
                     bwd["__source_index"].astype(int).to_numpy()
                 ].reset_index(drop=True)
-                for col_num in (1, 3):
+                for col_num in (1, 4):
                     fig.add_trace(
                         go.Scatter(
                             x=vg_fwd,
@@ -2286,6 +2360,32 @@ with main_content:
                     row=1, col=1,
                 )
 
+            # Transfer-log Peak Elimination targets for both directions.
+            log_target_specs = (
+                (f_state, keys["log_remove_slider_fwd"]),
+                (r_state, keys["log_remove_slider_bwd"]),
+            )
+            for log_state, log_key in log_target_specs:
+                log_target_vg = float(st.session_state[log_key])
+                log_idx, log_row = nearest_row_by_vg(
+                    log_state["df"], log_target_vg
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(log_row["GateV"])],
+                        y=[abs(float(log_row["DrainI_active"]))],
+                        mode="markers",
+                        marker=dict(
+                            symbol="x",
+                            size=12,
+                            color=log_state["color"],
+                            line=dict(width=2, color=log_state["color"]),
+                        ),
+                        showlegend=False,
+                    ),
+                    row=1, col=1,
+                )
+
             # Mobility curves and independently selected peak lines.
             fig.add_trace(
                 go.Scatter(
@@ -2294,7 +2394,7 @@ with main_content:
                     line=dict(color="blue", dash=fwd_dash, width=2),
                     showlegend=False,
                 ),
-                row=1, col=2,
+                row=1, col=3,
             )
             fig.add_trace(
                 go.Scatter(
@@ -2303,7 +2403,7 @@ with main_content:
                     line=dict(color="red", dash=rev_dash, width=2),
                     showlegend=False,
                 ),
-                row=1, col=2,
+                row=1, col=3,
             )
             for marker_state in (f_state, r_state):
                 fig.add_vline(
@@ -2311,7 +2411,7 @@ with main_content:
                     line_dash="dot",
                     line_width=1.5,
                     line_color=marker_state["color"],
-                    row=1, col=2,
+                    row=1, col=3,
                 )
 
             # Peak-elimination targets for both directions.
@@ -2332,7 +2432,7 @@ with main_content:
                         ),
                         showlegend=False,
                     ),
-                    row=1, col=2,
+                    row=1, col=3,
                 )
 
             # SS curves for both directions.
@@ -2343,7 +2443,7 @@ with main_content:
                     line=dict(color="blue", dash=fwd_dash, width=2),
                     showlegend=False,
                 ),
-                row=1, col=4,
+                row=1, col=2,
             )
             fig.add_trace(
                 go.Scatter(
@@ -2352,7 +2452,7 @@ with main_content:
                     line=dict(color="red", dash=rev_dash, width=2),
                     showlegend=False,
                 ),
-                row=1, col=4,
+                row=1, col=2,
             )
             for ss_state in (f_state, r_state):
                 if np.isfinite(ss_state["ss"]):
@@ -2361,7 +2461,22 @@ with main_content:
                         line_dash="dot",
                         line_width=1.5,
                         line_color=ss_state["color"],
-                        row=1, col=4,
+                        row=1, col=2,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[ss_state["ss_vg"]],
+                            y=[ss_state["ss"]],
+                            mode="markers",
+                            marker=dict(
+                                symbol="x",
+                                size=11,
+                                color=ss_state["color"],
+                                line=dict(width=2, color=ss_state["color"]),
+                            ),
+                            showlegend=False,
+                        ),
+                        row=1, col=2,
                     )
 
             # Tangents for both directions.
@@ -2404,7 +2519,7 @@ with main_content:
                             ),
                             showlegend=False,
                         ),
-                        row=1, col=3,
+                        row=1, col=4,
                     )
                 fig.add_trace(
                     go.Scatter(
@@ -2427,7 +2542,7 @@ with main_content:
                         ),
                         showlegend=False,
                     ),
-                    row=1, col=3,
+                    row=1, col=4,
                 )
 
             common_axis = dict(
@@ -2446,23 +2561,23 @@ with main_content:
                 **common_axis,
             )
             fig.update_yaxes(
-                title_text="Mobility (cm²/V·s)",
+                title_text="SS (mV/dec)",
+                range=[0, 500000],
+                tickformat=".1e",
+                exponentformat="E",
+                showexponent="all",
                 row=1,
                 col=2,
                 **common_axis,
             )
             fig.update_yaxes(
-                title_text="Current (A)",
-                tickformat=".1e",
-                exponentformat="E",
-                showexponent="all",
+                title_text="Mobility (cm²/V·s)",
                 row=1,
                 col=3,
                 **common_axis,
             )
             fig.update_yaxes(
-                title_text="SS (mV/dec)",
-                range=[0, 500000],
+                title_text="Current (A)",
                 tickformat=".1e",
                 exponentformat="E",
                 showexponent="all",
@@ -2560,202 +2675,139 @@ with main_content:
             )
             control_columns = st.columns(4, gap="large")
 
-            # Transfer Log controls: ON and OFF on the same row.
+            active_removed_key = (
+                keys["removed_fwd"]
+                if selected_direction == "Forward"
+                else keys["removed_bwd"]
+            )
+            active_force_key = (
+                keys["force_auto_peak_fwd"]
+                if selected_direction == "Forward"
+                else keys["force_auto_peak_bwd"]
+            )
+
+            def render_remove_buttons(parent, target_vg, prefix, reset_keys):
+                _, target_row = nearest_row_by_vg(active_state["df"], target_vg)
+                remove_col, reset_col = parent.columns(2, gap="small")
+                remove_col.button(
+                    "✕",
+                    key=f"{prefix}_remove",
+                    use_container_width=True,
+                    help="Remove selected point",
+                    on_click=remove_mobility_point,
+                    args=(
+                        active_removed_key,
+                        int(target_row["__source_index"]),
+                        active_force_key,
+                        reset_keys,
+                    ),
+                )
+                reset_col.button(
+                    "↶",
+                    key=f"{prefix}_reset",
+                    use_container_width=True,
+                    help="Restore all removed points",
+                    on_click=reset_mobility_points,
+                    args=(active_removed_key, active_force_key, reset_keys),
+                )
+
+            # Column 1: Transfer Log controls — ON/OFF + Peak Elimination.
             with control_columns[0]:
                 st.markdown(
                     f"<div class='slider-heading' style='color:{direction_color};'>"
-                    f"{selected_direction} · ON / OFF</div>",
+                    f"{selected_direction} · Transfer (Log)</div>",
                     unsafe_allow_html=True,
                 )
                 on_control_col, off_control_col = control_columns[0].columns(
                     2, gap="medium"
                 )
                 with on_control_col:
-                    st.markdown(
-                        "<div class='slider-heading'>ON</div>",
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown("<div class='slider-heading'>ON</div>", unsafe_allow_html=True)
                     render_discrete_vg_control(
-                        title="",
-                        slider_label="",
-                        state_key=active_state["on_key"],
-                        active_df=active_state["df"],
-                        default_value=float(
-                            active_state["df"]["GateV"].iloc[
-                                active_state["on_auto_idx"]
-                            ]
-                        ),
-                        button_prefix=(
-                            f"active_on_{selected_direction}_{file_id}_"
-                            f"{selected_sheet}_{operating_mode}"
-                        ),
-                        parent=on_control_col,
+                        "", "", active_state["on_key"], active_state["df"],
+                        float(active_state["df"]["GateV"].iloc[active_state["on_auto_idx"]]),
+                        f"active_on_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                        on_control_col,
                     )
                     on_control_col.button(
                         "Auto Set",
-                        key=(
-                            f"active_on_auto_{selected_direction}_{file_id}_"
-                            f"{selected_sheet}_{operating_mode}"
-                        ),
+                        key=f"active_on_auto_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
                         use_container_width=True,
                         on_click=set_state_value,
-                        args=(
-                            active_state["on_key"],
-                            float(
-                                active_state["df"]["GateV"].iloc[
-                                    active_state["on_auto_idx"]
-                                ]
-                            ),
-                        ),
+                        args=(active_state["on_key"], float(active_state["df"]["GateV"].iloc[active_state["on_auto_idx"]])),
                     )
-
                 with off_control_col:
-                    st.markdown(
-                        "<div class='slider-heading'>OFF</div>",
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown("<div class='slider-heading'>OFF</div>", unsafe_allow_html=True)
                     render_discrete_vg_control(
-                        title="",
-                        slider_label="",
-                        state_key=active_state["off_key"],
-                        active_df=active_state["df"],
-                        default_value=float(
-                            active_state["df"]["GateV"].iloc[
-                                active_state["off_auto_idx"]
-                            ]
-                        ),
-                        button_prefix=(
-                            f"active_off_{selected_direction}_{file_id}_"
-                            f"{selected_sheet}_{operating_mode}"
-                        ),
-                        parent=off_control_col,
+                        "", "", active_state["off_key"], active_state["df"],
+                        float(active_state["df"]["GateV"].iloc[active_state["off_auto_idx"]]),
+                        f"active_off_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                        off_control_col,
                     )
                     off_control_col.button(
                         "Auto Set",
-                        key=(
-                            f"active_off_auto_{selected_direction}_{file_id}_"
-                            f"{selected_sheet}_{operating_mode}"
-                        ),
+                        key=f"active_off_auto_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
                         use_container_width=True,
                         on_click=set_state_value,
-                        args=(
-                            active_state["off_key"],
-                            float(
-                                active_state["df"]["GateV"].iloc[
-                                    active_state["off_auto_idx"]
-                                ]
-                            ),
-                        ),
+                        args=(active_state["off_key"], float(active_state["df"]["GateV"].iloc[active_state["off_auto_idx"]])),
                     )
 
-            # Mobility controls.
+                st.markdown("<div class='control-section-spacer'></div>", unsafe_allow_html=True)
+                st.markdown("<div class='slider-heading'>Peak Elimination</div>", unsafe_allow_html=True)
+                log_remove_vg = render_discrete_vg_control(
+                    "", "", active_state["log_remove_key"], active_state["df"],
+                    float(active_state["df"]["GateV"].iloc[active_state["auto_idx"]]),
+                    f"log_peak_remove_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    control_columns[0],
+                )
+                render_remove_buttons(
+                    control_columns[0],
+                    log_remove_vg,
+                    f"log_peak_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    (),
+                )
+
+            # Column 2: SS has no slider.
             with control_columns[1]:
+                st.markdown("<div class='control-placeholder'></div>", unsafe_allow_html=True)
+
+            # Column 3: Mobility + Peak Elimination.
+            with control_columns[2]:
                 st.markdown(
                     f"<div class='slider-heading' style='color:{direction_color};'>"
                     f"{selected_direction} · Mobility</div>",
                     unsafe_allow_html=True,
                 )
                 render_discrete_vg_control(
-                    title="",
-                    slider_label="",
-                    state_key=active_state["peak_key"],
-                    active_df=active_state["df"],
-                    default_value=active_state["peak_default"],
-                    button_prefix=(
-                        f"active_mobility_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    parent=control_columns[1],
+                    "", "", active_state["peak_key"], active_state["df"],
+                    active_state["peak_default"],
+                    f"active_mobility_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    control_columns[2],
                 )
-                control_columns[1].button(
+                control_columns[2].button(
                     "Auto Set",
-                    key=(
-                        f"active_mobility_auto_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
+                    key=f"active_mobility_auto_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
                     use_container_width=True,
                     on_click=set_state_value,
-                    args=(
-                        active_state["peak_key"],
-                        float(active_state["peak_default"]),
-                    ),
+                    args=(active_state["peak_key"], float(active_state["peak_default"])),
                 )
 
-                st.markdown(
-                    "<div class='slider-heading' style='margin-top:8px;'>"
-                    "Peak Elimination</div>",
-                    unsafe_allow_html=True,
+                st.markdown("<div class='control-section-spacer'></div>", unsafe_allow_html=True)
+                st.markdown("<div class='slider-heading'>Peak Elimination</div>", unsafe_allow_html=True)
+                mobility_remove_vg = render_discrete_vg_control(
+                    "", "", active_state["remove_key"], active_state["df"],
+                    float(active_state["df"]["GateV"].iloc[active_state["auto_idx"]]),
+                    f"mobility_peak_remove_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    control_columns[2],
+                )
+                render_remove_buttons(
+                    control_columns[2],
+                    mobility_remove_vg,
+                    f"mobility_peak_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
+                    (),
                 )
 
-                active_removed_key = (
-                    keys["removed_fwd"]
-                    if selected_direction == "Forward"
-                    else keys["removed_bwd"]
-                )
-                active_remove_key = (
-                    keys["remove_slider_fwd"]
-                    if selected_direction == "Forward"
-                    else keys["remove_slider_bwd"]
-                )
-                active_force_key = (
-                    keys["force_auto_peak_fwd"]
-                    if selected_direction == "Forward"
-                    else keys["force_auto_peak_bwd"]
-                )
-
-                default_remove_vg = float(
-                    active_state["df"]["GateV"].iloc[
-                        active_state["auto_idx"]
-                    ]
-                )
-                removal_vg = render_discrete_vg_control(
-                    title="",
-                    slider_label="",
-                    state_key=active_remove_key,
-                    active_df=active_state["df"],
-                    default_value=default_remove_vg,
-                    button_prefix=(
-                        f"active_remove_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    parent=control_columns[1],
-                )
-                _, removal_row = nearest_row_by_vg(
-                    active_state["df"], removal_vg
-                )
-                remove_col, reset_col = control_columns[1].columns(
-                    2, gap="small"
-                )
-                remove_col.button(
-                    "✕",
-                    key=(
-                        f"active_rm_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    use_container_width=True,
-                    help="Remove selected point",
-                    on_click=remove_mobility_point,
-                    args=(
-                        active_removed_key,
-                        int(removal_row["__source_index"]),
-                        active_force_key,
-                        (),
-                    ),
-                )
-                reset_col.button(
-                    "↶",
-                    key=(
-                        f"active_rst_{selected_direction}_{file_id}_"
-                        f"{selected_sheet}_{operating_mode}"
-                    ),
-                    use_container_width=True,
-                    help="Undo all removed points",
-                    on_click=reset_mobility_points,
-                    args=(
-                        active_removed_key,
-                        active_force_key,
-                        (),
-                    ),
-                )
-
+            # Column 4: Transfer Linear has no independent slider.
+            with control_columns[3]:
+                st.markdown("<div class='control-placeholder'></div>", unsafe_allow_html=True)
 
