@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -2349,43 +2349,53 @@ with main_content:
             # to visible widgets, so repeated Forward/Reverse switching cannot
             # remove or overwrite the opposite direction's values.
             for guarded_state in (f_state, r_state):
+                guarded_df = guarded_state["df"]
+
+                on_default_vg = float(
+                    guarded_df["GateV"].iloc[
+                        guarded_state["on_auto_idx"]
+                    ]
+                )
+                off_default_vg = float(
+                    guarded_df["GateV"].iloc[
+                        guarded_state["off_auto_idx"]
+                    ]
+                )
+                elimination_default_vg = float(
+                    guarded_df["GateV"].iloc[
+                        guarded_state["auto_idx"]
+                    ]
+                )
+
                 initialize_slider_in_range(
                     guarded_state["on_key"],
-                    guarded_state["df"],
-                    guarded_state["on_default"],
+                    guarded_df,
+                    on_default_vg,
                 )
                 initialize_slider_in_range(
                     guarded_state["off_key"],
-                    guarded_state["df"],
-                    guarded_state["off_default"],
+                    guarded_df,
+                    off_default_vg,
                 )
                 initialize_slider_in_range(
                     guarded_state["peak_key"],
-                    guarded_state["df"],
+                    guarded_df,
                     guarded_state["peak_default"],
                 )
                 initialize_slider_in_range(
                     guarded_state["ss_key"],
-                    guarded_state["df"],
+                    guarded_df,
                     guarded_state["ss_default"],
                 )
                 initialize_slider_in_range(
                     guarded_state["remove_key"],
-                    guarded_state["df"],
-                    float(
-                        guarded_state["df"]["GateV"].iloc[
-                            guarded_state["auto_idx"]
-                        ]
-                    ),
+                    guarded_df,
+                    elimination_default_vg,
                 )
                 initialize_slider_in_range(
                     guarded_state["log_remove_key"],
-                    guarded_state["df"],
-                    float(
-                        guarded_state["df"]["GateV"].iloc[
-                            guarded_state["auto_idx"]
-                        ]
-                    ),
+                    guarded_df,
+                    elimination_default_vg,
                 )
 
             def build_current_log_entry(log_id=None):
