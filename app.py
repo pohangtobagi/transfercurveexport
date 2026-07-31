@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -341,6 +341,7 @@ def _default_persistent_state():
         "active_folder": None,
         "active_log_id": None,
         "project_device_settings": {},
+        "project_workspaces": {},
     }
 
 
@@ -358,6 +359,7 @@ def load_projects_state():
         data.setdefault("active_folder", None)
         data.setdefault("active_log_id", None)
         data.setdefault("project_device_settings", {})
+        data.setdefault("project_workspaces", {})
         return data
     except Exception:
         return _default_persistent_state()
@@ -371,6 +373,9 @@ def save_projects_state():
         "active_log_id": st.session_state.get("persistent_active_log_id"),
         "project_device_settings": st.session_state.get(
             "project_device_settings", {}
+        ),
+        "project_workspaces": st.session_state.get(
+            "project_workspaces", {}
         ),
     }
     temp_file = STORAGE_FILE.with_suffix(".tmp")
@@ -395,6 +400,9 @@ def initialize_log_state():
         st.session_state["project_device_settings"] = saved.get(
             "project_device_settings", {}
         )
+        st.session_state["project_workspaces"] = saved.get(
+            "project_workspaces", {}
+        )
 
     if "active_log_folder" not in st.session_state:
         st.session_state["active_log_folder"] = None
@@ -402,6 +410,8 @@ def initialize_log_state():
         st.session_state["persistent_active_log_id"] = None
     if "project_device_settings" not in st.session_state:
         st.session_state["project_device_settings"] = {}
+    if "project_workspaces" not in st.session_state:
+        st.session_state["project_workspaces"] = {}
     if "file_uploader_generation" not in st.session_state:
         st.session_state["file_uploader_generation"] = 0
     if "active_file_source" not in st.session_state:
@@ -426,10 +436,104 @@ def create_log_folder(folder_name):
         "length_um": 100.0,
         "cox_nf_cm2": 34.5,
     }
+    st.session_state["project_workspaces"][name] = (
+        default_project_workspace()
+    )
     st.session_state["active_log_folder"] = name
     st.session_state["persistent_active_log_id"] = None
     save_projects_state()
     return True, f"'{name}' 프로젝트를 생성했습니다."
+
+
+def default_project_workspace():
+    return {
+        "active_file_bytes": None,
+        "active_file_name": None,
+        "active_file_source": "upload",
+        "active_log_id": None,
+        "uploader_generation": 0,
+        "selected_sheet": None,
+    }
+
+
+def ensure_project_workspace(project_name):
+    if not project_name:
+        return default_project_workspace()
+
+    workspace = st.session_state["project_workspaces"].setdefault(
+        project_name, default_project_workspace()
+    )
+    defaults = default_project_workspace()
+    for key, value in defaults.items():
+        workspace.setdefault(key, value)
+    return workspace
+
+
+def save_current_workspace(project_name):
+    """Snapshot only the current project's file/log workspace."""
+    if not project_name:
+        return
+    workspace = ensure_project_workspace(project_name)
+    workspace["active_file_bytes"] = st.session_state.get(
+        "active_file_bytes"
+    )
+    workspace["active_file_name"] = st.session_state.get(
+        "active_file_name"
+    )
+    workspace["active_file_source"] = st.session_state.get(
+        "active_file_source", "upload"
+    )
+    workspace["active_log_id"] = st.session_state.get(
+        "persistent_active_log_id"
+    )
+    workspace["uploader_generation"] = int(
+        st.session_state.get("file_uploader_generation", 0)
+    )
+    workspace["selected_sheet"] = st.session_state.get(
+        "current_selected_sheet"
+    )
+    save_projects_state()
+
+
+def load_project_workspace(project_name):
+    """Load one project's file/log workspace without touching other projects."""
+    workspace = ensure_project_workspace(project_name)
+
+    if workspace.get("active_file_bytes") is not None:
+        st.session_state["active_file_bytes"] = workspace[
+            "active_file_bytes"
+        ]
+        st.session_state["active_file_name"] = workspace.get(
+            "active_file_name"
+        )
+    else:
+        st.session_state.pop("active_file_bytes", None)
+        st.session_state.pop("active_file_name", None)
+
+    st.session_state["active_file_source"] = workspace.get(
+        "active_file_source", "upload"
+    )
+    st.session_state["persistent_active_log_id"] = workspace.get(
+        "active_log_id"
+    )
+    st.session_state["file_uploader_generation"] = int(
+        workspace.get("uploader_generation", 0)
+    )
+
+    selected_sheet = workspace.get("selected_sheet")
+    if selected_sheet:
+        st.session_state["restored_sheet"] = selected_sheet
+    else:
+        st.session_state.pop("restored_sheet", None)
+
+
+def update_active_project_workspace(**updates):
+    project_name = st.session_state.get("active_log_folder")
+    if not project_name:
+        return
+    workspace = ensure_project_workspace(project_name)
+    workspace.update(updates)
+    save_projects_state()
 
 
 def ensure_project_device_settings(project_name):
@@ -497,6 +601,8 @@ def delete_log_entry(folder_name, entry_id):
         st.session_state["persistent_active_log_id"] = None
         st.session_state.pop("active_file_bytes", None)
         st.session_state.pop("active_file_name", None)
+        workspace = ensure_project_workspace(folder_name)
+        workspace.update(default_project_workspace())
 
     save_projects_state()
 
@@ -508,6 +614,9 @@ def clear_log_folder(folder_name):
         st.session_state["persistent_active_log_id"] = None
         st.session_state.pop("active_file_bytes", None)
         st.session_state.pop("active_file_name", None)
+        ensure_project_workspace(folder_name).update(
+            default_project_workspace()
+        )
         save_projects_state()
 
 
@@ -699,12 +808,25 @@ def restore_log_state(record, folder_name=None):
     st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["active_file_bytes"] = file_bytes
     st.session_state["active_file_source"] = "log"
+    if folder_name:
+        workspace = ensure_project_workspace(folder_name)
+        workspace["active_file_bytes"] = file_bytes
+        workspace["active_file_name"] = record.get(
+            "File", "restored.xlsx"
+        )
+        workspace["active_file_source"] = "log"
+        workspace["active_log_id"] = record.get("_log_id")
     # Change the uploader widget key whenever a log is opened. This destroys
     # the stale uploader instance that still contains a previously uploaded
     # file, so later slider edits/reruns cannot switch back to that file.
     st.session_state["file_uploader_generation"] = (
         int(st.session_state.get("file_uploader_generation", 0)) + 1
     )
+    if folder_name:
+        ensure_project_workspace(folder_name)[
+            "uploader_generation"
+        ] = st.session_state["file_uploader_generation"]
+        save_projects_state()
     st.session_state["restored_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["restored_file_bytes"] = file_bytes
     st.session_state["restored_sheet"] = record.get("Sheet")
@@ -774,13 +896,14 @@ def auto_restore_last_log():
     if not active_id:
         return
 
-    for folder_name, records in st.session_state.get(
+    active_folder = st.session_state.get("active_log_folder")
+    records = st.session_state.get(
         "analysis_log_folders", {}
-    ).items():
-        for record in records:
-            if record.get("_log_id") == active_id:
-                restore_log_state(record, folder_name)
-                return
+    ).get(active_folder, [])
+    for record in records:
+        if record.get("_log_id") == active_id:
+            restore_log_state(record, active_folder)
+            return
 
 
 def consume_restore_value(key, default=None):
@@ -819,6 +942,7 @@ if project_names:
     # Ensure legacy projects also receive independent defaults.
     for project_name in project_names:
         ensure_project_device_settings(project_name)
+        ensure_project_workspace(project_name)
 
     project_display_names = [f"📁  {name}" for name in project_names]
     selected_display = st.sidebar.radio(
@@ -836,9 +960,16 @@ if project_names:
         project_display_names.index(selected_display)
     ]
 
-    if st.session_state.get("active_log_folder") != active_project:
+    previous_project = st.session_state.get(
+        "workspace_loaded_project"
+    )
+    if previous_project != active_project:
+        if previous_project:
+            save_current_workspace(previous_project)
+
         st.session_state["active_log_folder"] = active_project
-        st.session_state["persistent_active_log_id"] = None
+        load_project_workspace(active_project)
+        st.session_state["workspace_loaded_project"] = active_project
         save_projects_state()
 
     active_logs = st.session_state["analysis_log_folders"][active_project]
@@ -1005,6 +1136,9 @@ if project_names:
     ):
         del st.session_state["analysis_log_folders"][active_project]
         st.session_state["project_device_settings"].pop(
+            active_project, None
+        )
+        st.session_state["project_workspaces"].pop(
             active_project, None
         )
         st.session_state["active_log_folder"] = None
@@ -1791,13 +1925,19 @@ if project_add_col.button(
 ):
     st.session_state["add_project_requested"] = True
 
+current_project = st.session_state.get(
+    "active_log_folder"
+)
 uploader_generation = int(
     st.session_state.get("file_uploader_generation", 0)
 )
 uploader_value = st.file_uploader(
     "측정된 엑셀 파일을 업로드하세요",
     type=["xlsx", "xls"],
-    key=f"measurement_file_uploader_{uploader_generation}",
+    key=(
+        f"measurement_file_uploader_{current_project}_"
+        f"{uploader_generation}"
+    ),
 )
 main_content = st.container()
 
@@ -1827,6 +1967,15 @@ if uploader_value is not None:
         # Disconnect the old log ID so Save cannot overwrite it accidentally.
         st.session_state["persistent_active_log_id"] = None
         st.session_state.pop("restored_log_id", None)
+        update_active_project_workspace(
+            active_file_bytes=new_upload_bytes,
+            active_file_name=getattr(
+                uploader_value, "name", "uploaded.xlsx"
+            ),
+            active_file_source="upload",
+            active_log_id=None,
+            uploader_generation=uploader_generation,
+        )
         uploaded_file = uploader_value
 
 elif active_source == "log" and st.session_state.get("active_file_bytes"):
@@ -1884,8 +2033,14 @@ with main_content:
                 "Select Data Sheet",
                 target_sheets,
                 index=target_sheets.index(default_sheet),
-                key=f"sheet_selector_{file_id}",
+                key=(
+                    f"sheet_selector_{current_project}_{file_id}"
+                ),
                 label_visibility="collapsed",
+            )
+            st.session_state["current_selected_sheet"] = selected_sheet
+            update_active_project_workspace(
+                selected_sheet=selected_sheet
             )
             st.markdown("---")
 
@@ -2690,6 +2845,20 @@ with main_content:
                         "File", "restored.xlsx"
                     )
                     st.session_state["active_file_source"] = "log"
+                    update_active_project_workspace(
+                        active_file_bytes=updated_entry["_file_bytes"],
+                        active_file_name=updated_entry.get(
+                            "File", "restored.xlsx"
+                        ),
+                        active_file_source="log",
+                        active_log_id=active_id,
+                        uploader_generation=int(
+                            st.session_state.get(
+                                "file_uploader_generation", 0
+                            )
+                        ),
+                        selected_sheet=selected_sheet,
+                    )
                     save_projects_state()
                     st.session_state["save_status_message"] = (
                         "현재 화면의 방향과 선택값을 그대로 저장했습니다."
@@ -2717,6 +2886,18 @@ with main_content:
                 st.session_state["active_file_source"] = "log"
                 st.session_state["file_uploader_generation"] = (
                     int(st.session_state.get("file_uploader_generation", 0)) + 1
+                )
+                update_active_project_workspace(
+                    active_file_bytes=log_entry["_file_bytes"],
+                    active_file_name=log_entry.get(
+                        "File", "restored.xlsx"
+                    ),
+                    active_file_source="log",
+                    active_log_id=log_entry["_log_id"],
+                    uploader_generation=int(
+                        st.session_state["file_uploader_generation"]
+                    ),
+                    selected_sheet=selected_sheet,
                 )
                 save_projects_state()
                 st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
