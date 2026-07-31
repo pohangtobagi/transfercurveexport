@@ -1707,20 +1707,13 @@ main_content = st.container()
 
 # One authoritative source at a time.
 #
-# Opening a log increments file_uploader_generation, which creates an empty
-# uploader and permanently detaches the old uploaded-file object.
+# Opening a log increments file_uploader_generation, so an old uploaded file
+# cannot survive into the log view. A file selected in the CURRENT uploader
+# generation is therefore always an explicit new upload and takes priority.
 active_source = st.session_state.get("active_file_source", "upload")
 uploaded_file = None
 
-if active_source == "log" and st.session_state.get("active_file_bytes"):
-    restored_buffer = io.BytesIO(st.session_state["active_file_bytes"])
-    restored_buffer.name = st.session_state.get(
-        "active_file_name", "restored.xlsx"
-    )
-    uploaded_file = restored_buffer
-
-elif uploader_value is not None:
-    # A file in the current uploader generation is an explicit new upload.
+if uploader_value is not None:
     try:
         uploader_value.seek(0)
         new_upload_bytes = uploader_value.read()
@@ -1734,7 +1727,18 @@ elif uploader_value is not None:
         st.session_state["active_file_name"] = getattr(
             uploader_value, "name", "uploaded.xlsx"
         )
+        # A newly uploaded file is not the previously opened saved log.
+        # Disconnect the old log ID so Save cannot overwrite it accidentally.
+        st.session_state["persistent_active_log_id"] = None
+        st.session_state.pop("restored_log_id", None)
         uploaded_file = uploader_value
+
+elif active_source == "log" and st.session_state.get("active_file_bytes"):
+    restored_buffer = io.BytesIO(st.session_state["active_file_bytes"])
+    restored_buffer.name = st.session_state.get(
+        "active_file_name", "restored.xlsx"
+    )
+    uploaded_file = restored_buffer
 
 elif st.session_state.get("active_file_bytes"):
     fallback_buffer = io.BytesIO(st.session_state["active_file_bytes"])
