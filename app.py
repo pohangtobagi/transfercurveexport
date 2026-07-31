@@ -392,6 +392,12 @@ def initialize_log_state():
         st.session_state["active_log_folder"] = None
     if "persistent_active_log_id" not in st.session_state:
         st.session_state["persistent_active_log_id"] = None
+    if "file_uploader_generation" not in st.session_state:
+        st.session_state["file_uploader_generation"] = 0
+    if "active_file_source" not in st.session_state:
+        st.session_state["active_file_source"] = (
+            "log" if st.session_state.get("active_file_bytes") else "upload"
+        )
 
 
 def create_log_folder(folder_name):
@@ -624,9 +630,13 @@ def restore_log_state(record, folder_name=None):
     )
     st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["active_file_bytes"] = file_bytes
-    # Ignore any stale file that remains visible in the uploader after a log
-    # is opened. The opened log becomes the authoritative file source.
     st.session_state["active_file_source"] = "log"
+    # Change the uploader widget key whenever a log is opened. This destroys
+    # the stale uploader instance that still contains a previously uploaded
+    # file, so later slider edits/reruns cannot switch back to that file.
+    st.session_state["file_uploader_generation"] = (
+        int(st.session_state.get("file_uploader_generation", 0)) + 1
+    )
     st.session_state["restored_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["restored_file_bytes"] = file_bytes
     st.session_state["restored_sheet"] = record.get("Sheet")
@@ -1655,17 +1665,6 @@ def render_discrete_vg_control(
 # Upload
 # ============================================================
 
-def activate_uploaded_file_source():
-    """Switch to uploader data only after the uploader actually changes."""
-    st.session_state["active_file_source"] = "upload"
-
-
-if "active_file_source" not in st.session_state:
-    st.session_state["active_file_source"] = (
-        "log" if st.session_state.get("active_file_bytes") else "upload"
-    )
-
-
 if st.session_state.get("restore_error"):
     st.error(st.session_state.pop("restore_error"))
 
@@ -1696,15 +1695,20 @@ if project_add_col.button(
 ):
     st.session_state["add_project_requested"] = True
 
+uploader_generation = int(
+    st.session_state.get("file_uploader_generation", 0)
+)
 uploader_value = st.file_uploader(
     "측정된 엑셀 파일을 업로드하세요",
     type=["xlsx", "xls"],
-    key="measurement_file_uploader",
-    on_change=activate_uploaded_file_source,
+    key=f"measurement_file_uploader_{uploader_generation}",
 )
 main_content = st.container()
 
-# Resolve exactly one authoritative file source.
+# One authoritative source at a time.
+#
+# Opening a log increments file_uploader_generation, which creates an empty
+# uploader and permanently detaches the old uploaded-file object.
 active_source = st.session_state.get("active_file_source", "upload")
 uploaded_file = None
 
@@ -1716,25 +1720,28 @@ if active_source == "log" and st.session_state.get("active_file_bytes"):
     uploaded_file = restored_buffer
 
 elif uploader_value is not None:
-    uploaded_file = uploader_value
+    # A file in the current uploader generation is an explicit new upload.
     try:
         uploader_value.seek(0)
-        current_file_bytes = uploader_value.read()
+        new_upload_bytes = uploader_value.read()
         uploader_value.seek(0)
-        st.session_state["active_file_bytes"] = current_file_bytes
+    except Exception:
+        new_upload_bytes = None
+
+    if new_upload_bytes:
+        st.session_state["active_file_source"] = "upload"
+        st.session_state["active_file_bytes"] = new_upload_bytes
         st.session_state["active_file_name"] = getattr(
             uploader_value, "name", "uploaded.xlsx"
         )
-        st.session_state["active_file_source"] = "upload"
-    except Exception:
-        pass
+        uploaded_file = uploader_value
 
 elif st.session_state.get("active_file_bytes"):
-    restored_buffer = io.BytesIO(st.session_state["active_file_bytes"])
-    restored_buffer.name = st.session_state.get(
+    fallback_buffer = io.BytesIO(st.session_state["active_file_bytes"])
+    fallback_buffer.name = st.session_state.get(
         "active_file_name", "restored.xlsx"
     )
-    uploaded_file = restored_buffer
+    uploaded_file = fallback_buffer
 
 with main_content:
     if uploaded_file:
@@ -2428,8 +2435,6 @@ with main_content:
                 )
 
             def build_current_log_entry(log_id=None):
-                # Save the file currently displayed/analyzed, not a stale file
-                # that may still remain in the uploader widget.
                 try:
                     uploaded_file.seek(0)
                     saved_file_bytes = uploaded_file.read()
@@ -2601,6 +2606,9 @@ with main_content:
                     "File", "restored.xlsx"
                 )
                 st.session_state["active_file_source"] = "log"
+                st.session_state["file_uploader_generation"] = (
+                    int(st.session_state.get("file_uploader_generation", 0)) + 1
+                )
                 save_projects_state()
                 st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
                 st.rerun()
