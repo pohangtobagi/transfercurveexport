@@ -13,8 +13,8 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
-st.title("FET-Analysis_Minjae")
+st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
+st.title("FET-Analysis_Minjae X Junseong")
 
 st.markdown("""
 <style>
@@ -340,6 +340,7 @@ def _default_persistent_state():
         "folders": {},
         "active_folder": None,
         "active_log_id": None,
+        "project_device_settings": {},
     }
 
 
@@ -356,6 +357,7 @@ def load_projects_state():
         data.setdefault("folders", {})
         data.setdefault("active_folder", None)
         data.setdefault("active_log_id", None)
+        data.setdefault("project_device_settings", {})
         return data
     except Exception:
         return _default_persistent_state()
@@ -367,6 +369,9 @@ def save_projects_state():
         "folders": st.session_state.get("analysis_log_folders", {}),
         "active_folder": st.session_state.get("active_log_folder"),
         "active_log_id": st.session_state.get("persistent_active_log_id"),
+        "project_device_settings": st.session_state.get(
+            "project_device_settings", {}
+        ),
     }
     temp_file = STORAGE_FILE.with_suffix(".tmp")
     try:
@@ -387,11 +392,16 @@ def initialize_log_state():
         st.session_state["analysis_log_folders"] = saved["folders"]
         st.session_state["active_log_folder"] = saved["active_folder"]
         st.session_state["persistent_active_log_id"] = saved["active_log_id"]
+        st.session_state["project_device_settings"] = saved.get(
+            "project_device_settings", {}
+        )
 
     if "active_log_folder" not in st.session_state:
         st.session_state["active_log_folder"] = None
     if "persistent_active_log_id" not in st.session_state:
         st.session_state["persistent_active_log_id"] = None
+    if "project_device_settings" not in st.session_state:
+        st.session_state["project_device_settings"] = {}
     if "file_uploader_generation" not in st.session_state:
         st.session_state["file_uploader_generation"] = 0
     if "active_file_source" not in st.session_state:
@@ -410,10 +420,67 @@ def create_log_folder(folder_name):
         return False, "같은 이름의 프로젝트가 이미 있습니다."
 
     folders[name] = []
+    st.session_state["project_device_settings"][name] = {
+        "operating_mode": "Linear",
+        "width_um": 1050.0,
+        "length_um": 100.0,
+        "cox_nf_cm2": 34.5,
+    }
     st.session_state["active_log_folder"] = name
     st.session_state["persistent_active_log_id"] = None
     save_projects_state()
     return True, f"'{name}' 프로젝트를 생성했습니다."
+
+
+def ensure_project_device_settings(project_name):
+    if not project_name:
+        return {
+            "operating_mode": "Linear",
+            "width_um": 1050.0,
+            "length_um": 100.0,
+            "cox_nf_cm2": 34.5,
+        }
+
+    settings = st.session_state["project_device_settings"].setdefault(
+        project_name,
+        {
+            "operating_mode": "Linear",
+            "width_um": 1050.0,
+            "length_um": 100.0,
+            "cox_nf_cm2": 34.5,
+        },
+    )
+    settings.setdefault("operating_mode", "Linear")
+    settings.setdefault("width_um", 1050.0)
+    settings.setdefault("length_um", 100.0)
+    settings.setdefault("cox_nf_cm2", 34.5)
+    return settings
+
+
+def save_project_device_widget(project_name, field_name, widget_key):
+    if not project_name:
+        return
+    settings = ensure_project_device_settings(project_name)
+    settings[field_name] = st.session_state[widget_key]
+    save_projects_state()
+
+
+def load_log_device_into_project(project_name, record):
+    """A saved log updates only its owning project's device information."""
+    if not project_name:
+        return
+
+    settings = ensure_project_device_settings(project_name)
+    mode = record.get("Operating mode")
+    if mode in ("Linear", "Saturation"):
+        settings["operating_mode"] = mode
+    if record.get("Width (μm)") is not None:
+        settings["width_um"] = float(record["Width (μm)"])
+    if record.get("Length (μm)") is not None:
+        settings["length_um"] = float(record["Length (μm)"])
+    if record.get("Cox (nF/cm²)") is not None:
+        settings["cox_nf_cm2"] = float(record["Cox (nF/cm²)"])
+    save_projects_state()
 
 
 def delete_log_entry(folder_name, entry_id):
@@ -618,6 +685,7 @@ def restore_log_state(record, folder_name=None):
     """Restore the uploaded file and every saved analysis selection."""
     if folder_name:
         st.session_state["active_log_folder"] = folder_name
+        load_log_device_into_project(folder_name, record)
     file_bytes = record.get("_file_bytes")
     if not file_bytes:
         st.session_state["restore_error"] = "저장된 원본 파일 데이터가 없습니다."
@@ -720,80 +788,16 @@ def consume_restore_value(key, default=None):
 
 
 
-# ============================================================
-# Device information state
-# ============================================================
-restored_mode = st.session_state.get("restored_operating_mode")
-
-# A clicked log is handled on the next rerun before any device widget is created.
-if st.session_state.pop("device_restore_pending", False):
-    if restored_mode in ["Linear", "Saturation"]:
-        st.session_state["operating_mode_widget"] = restored_mode
-    if st.session_state.get("restored_W") is not None:
-        st.session_state["width_widget"] = float(st.session_state["restored_W"])
-    if st.session_state.get("restored_L") is not None:
-        st.session_state["length_widget"] = float(st.session_state["restored_L"])
-    if st.session_state.get("restored_Cox_nf") is not None:
-        st.session_state["cox_widget"] = float(st.session_state["restored_Cox_nf"])
-
-if "operating_mode_widget" not in st.session_state:
-    st.session_state["operating_mode_widget"] = (
-        restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
-    )
-if "width_widget" not in st.session_state:
-    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1050.0)
-if "length_widget" not in st.session_state:
-    st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
-if "cox_widget" not in st.session_state:
-    st.session_state["cox_widget"] = float(st.session_state.get("restored_Cox_nf") or 34.5)
-
-operating_mode = st.session_state["operating_mode_widget"]
-W = float(st.session_state["width_widget"])
-L = float(st.session_state["length_widget"])
-Cox_nf = float(st.session_state["cox_widget"])
-Cox = Cox_nf * 1e-9
-
-
 initialize_log_state()
 auto_restore_last_log()
 
 # ============================================================
-# Sidebar: Project manager
+# Sidebar: Projects first
 # ============================================================
 initialize_log_state()
 
-st.sidebar.header("Device Information")
-operating_mode = st.sidebar.radio(
-    "Operating Mode",
-    ["Linear", "Saturation"],
-    key="operating_mode_widget",
-    horizontal=True,
-)
-W = st.sidebar.number_input(
-    "Width (μm)",
-    min_value=0.000001,
-    step=50.0,
-    key="width_widget",
-)
-L = st.sidebar.number_input(
-    "Length (μm)",
-    min_value=0.000001,
-    step=50.0,
-    key="length_widget",
-)
-Cox_nf = st.sidebar.number_input(
-    "Capacitance (nF/cm⁻²)",
-    min_value=0.000001,
-    key="cox_widget",
-)
-Cox = Cox_nf * 1e-9
-st.sidebar.markdown("---")
-
-# Populated after an Excel file is available.
-sheet_selector_slot = st.sidebar.container()
-
 st.sidebar.header("Projects")
-st.sidebar.caption("프로젝트를 생성하거나 선택한 뒤 분석을 진행하세요.")
+st.sidebar.caption("프로젝트별로 로그와 Device Information이 독립 저장됩니다.")
 
 project_name_input = st.sidebar.text_input(
     "New project name",
@@ -812,6 +816,10 @@ if st.sidebar.button("＋ Create Project", use_container_width=True):
 project_names = list(st.session_state["analysis_log_folders"].keys())
 
 if project_names:
+    # Ensure legacy projects also receive independent defaults.
+    for project_name in project_names:
+        ensure_project_device_settings(project_name)
+
     project_display_names = [f"📁  {name}" for name in project_names]
     selected_display = st.sidebar.radio(
         "Project list",
@@ -824,33 +832,47 @@ if project_names:
         key="project_radio_sidebar",
         label_visibility="collapsed",
     )
-    active_project = project_names[project_display_names.index(selected_display)]
-    st.session_state["active_log_folder"] = active_project
-    save_projects_state()
+    active_project = project_names[
+        project_display_names.index(selected_display)
+    ]
+
+    if st.session_state.get("active_log_folder") != active_project:
+        st.session_state["active_log_folder"] = active_project
+        st.session_state["persistent_active_log_id"] = None
+        save_projects_state()
 
     active_logs = st.session_state["analysis_log_folders"][active_project]
-    st.sidebar.caption(f"Selected: {active_project} · {len(active_logs)} logs")
+    st.sidebar.caption(
+        f"Selected: {active_project} · {len(active_logs)} logs"
+    )
 
     if active_logs:
         st.sidebar.download_button(
             "Export Project to Excel",
             data=folder_excel_bytes(active_project),
-            file_name=f"{safe_excel_filename(active_project)}_FET_parameters.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_name=(
+                f"{safe_excel_filename(active_project)}_FET_parameters.xlsx"
+            ),
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
             use_container_width=True,
             key=f"sidebar_export_{active_project}",
         )
 
         st.sidebar.markdown(
-            "<div style='font-size:12px; font-weight:700; margin:3px 0 2px 0;'>"
-            "Saved logs</div>",
+            "<div style='font-size:12px; font-weight:700; "
+            "margin:3px 0 2px 0;'>Saved logs</div>",
             unsafe_allow_html=True,
         )
         for log_idx, log_record in enumerate(active_logs, start=1):
             log_name_col, log_delete_col = st.sidebar.columns([8.5, 1])
 
             saved_at = str(log_record.get("Saved at", ""))
-            saved_time = saved_at[11:16] if len(saved_at) >= 16 else ""
+            saved_time = (
+                saved_at[11:16] if len(saved_at) >= 16 else ""
+            )
             raw_file_name = str(log_record.get("File", ""))
             compact_file_name = (
                 raw_file_name
@@ -863,11 +885,15 @@ if project_names:
 
             if log_name_col.button(
                 log_label,
-                key=f"open_log_{active_project}_{log_record['_log_id']}",
+                key=(
+                    f"open_log_{active_project}_"
+                    f"{log_record['_log_id']}"
+                ),
                 use_container_width=True,
                 help=(
-                    f"{raw_file_name} · {log_record.get('Sheet', '')} · "
-                    f"{saved_at}\n저장 당시 분석 상태로 열기"
+                    f"{raw_file_name} · "
+                    f"{log_record.get('Sheet', '')} · {saved_at}\n"
+                    "저장 당시 분석 상태로 열기"
                 ),
             ):
                 restore_log_state(log_record, active_project)
@@ -876,11 +902,16 @@ if project_names:
 
             if log_delete_col.button(
                 "×",
-                key=f"sidebar_delete_{active_project}_{log_record['_log_id']}",
+                key=(
+                    f"sidebar_delete_{active_project}_"
+                    f"{log_record['_log_id']}"
+                ),
                 help="이 로그 삭제",
                 use_container_width=True,
             ):
-                delete_log_entry(active_project, log_record["_log_id"])
+                delete_log_entry(
+                    active_project, log_record["_log_id"]
+                )
                 st.rerun()
     else:
         st.sidebar.info("이 프로젝트에는 저장된 로그가 없습니다.")
@@ -900,6 +931,9 @@ if project_names:
         use_container_width=True,
     ):
         del st.session_state["analysis_log_folders"][active_project]
+        st.session_state["project_device_settings"].pop(
+            active_project, None
+        )
         st.session_state["active_log_folder"] = None
         st.session_state["persistent_active_log_id"] = None
         st.session_state.pop("active_file_bytes", None)
@@ -914,25 +948,77 @@ else:
 st.sidebar.markdown("---")
 
 # ============================================================
-# Device information state
+# Project-specific Device Information
 # ============================================================
-restored_mode = st.session_state.get("restored_operating_mode")
-if "operating_mode_widget" not in st.session_state:
-    st.session_state["operating_mode_widget"] = (
-        restored_mode if restored_mode in ["Linear", "Saturation"] else "Linear"
-    )
-if "width_widget" not in st.session_state:
-    st.session_state["width_widget"] = float(st.session_state.get("restored_W") or 1050.0)
-if "length_widget" not in st.session_state:
-    st.session_state["length_widget"] = float(st.session_state.get("restored_L") or 100.0)
-if "cox_widget" not in st.session_state:
-    st.session_state["cox_widget"] = float(st.session_state.get("restored_Cox_nf") or 34.5)
+st.sidebar.header("Device Information")
 
-operating_mode = st.session_state["operating_mode_widget"]
-W = float(st.session_state["width_widget"])
-L = float(st.session_state["length_widget"])
-Cox_nf = float(st.session_state["cox_widget"])
-Cox = Cox_nf * 1e-9
+if active_project:
+    project_device = ensure_project_device_settings(active_project)
+
+    mode_key = f"operating_mode_widget__{active_project}"
+    width_key = f"width_widget__{active_project}"
+    length_key = f"length_widget__{active_project}"
+    cox_key = f"cox_widget__{active_project}"
+
+    # Rebuild project-specific widgets from that project's stored values.
+    if mode_key not in st.session_state:
+        st.session_state[mode_key] = project_device["operating_mode"]
+    if width_key not in st.session_state:
+        st.session_state[width_key] = float(project_device["width_um"])
+    if length_key not in st.session_state:
+        st.session_state[length_key] = float(project_device["length_um"])
+    if cox_key not in st.session_state:
+        st.session_state[cox_key] = float(project_device["cox_nf_cm2"])
+
+    operating_mode = st.sidebar.radio(
+        "Operating Mode",
+        ["Linear", "Saturation"],
+        key=mode_key,
+        horizontal=True,
+        on_change=save_project_device_widget,
+        args=(active_project, "operating_mode", mode_key),
+    )
+    W = st.sidebar.number_input(
+        "Width (μm)",
+        min_value=0.000001,
+        step=50.0,
+        key=width_key,
+        on_change=save_project_device_widget,
+        args=(active_project, "width_um", width_key),
+    )
+    L = st.sidebar.number_input(
+        "Length (μm)",
+        min_value=0.000001,
+        step=50.0,
+        key=length_key,
+        on_change=save_project_device_widget,
+        args=(active_project, "length_um", length_key),
+    )
+    Cox_nf = st.sidebar.number_input(
+        "Capacitance (nF/cm⁻²)",
+        min_value=0.000001,
+        key=cox_key,
+        on_change=save_project_device_widget,
+        args=(active_project, "cox_nf_cm2", cox_key),
+    )
+
+    # Keep model storage synchronized even before a callback fires.
+    project_device["operating_mode"] = operating_mode
+    project_device["width_um"] = float(W)
+    project_device["length_um"] = float(L)
+    project_device["cox_nf_cm2"] = float(Cox_nf)
+else:
+    operating_mode = "Linear"
+    W = 1050.0
+    L = 100.0
+    Cox_nf = 34.5
+    st.sidebar.caption("프로젝트를 선택하면 값을 수정할 수 있습니다.")
+
+Cox = float(Cox_nf) * 1e-9
+st.sidebar.markdown("---")
+
+# Populated after an Excel file is available.
+sheet_selector_slot = st.sidebar.container()
 
 # ============================================================
 # Helpers
@@ -2439,6 +2525,15 @@ with main_content:
                 )
 
             def build_current_log_entry(log_id=None):
+                if current_project:
+                    current_settings = ensure_project_device_settings(
+                        current_project
+                    )
+                    current_settings["operating_mode"] = operating_mode
+                    current_settings["width_um"] = float(W)
+                    current_settings["length_um"] = float(L)
+                    current_settings["cox_nf_cm2"] = float(Cox_nf)
+                    save_projects_state()
                 try:
                     uploaded_file.seek(0)
                     saved_file_bytes = uploaded_file.read()
