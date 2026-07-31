@@ -846,6 +846,79 @@ if project_names:
         f"Selected: {active_project} · {len(active_logs)} logs"
     )
 
+
+    st.sidebar.header("Device Information")
+
+    if active_project:
+        project_device = ensure_project_device_settings(active_project)
+
+        mode_key = f"operating_mode_widget__{active_project}"
+        width_key = f"width_widget__{active_project}"
+        length_key = f"length_widget__{active_project}"
+        cox_key = f"cox_widget__{active_project}"
+
+        # Rebuild project-specific widgets from that project's stored values.
+        if mode_key not in st.session_state:
+            st.session_state[mode_key] = project_device["operating_mode"]
+        if width_key not in st.session_state:
+            st.session_state[width_key] = float(project_device["width_um"])
+        if length_key not in st.session_state:
+            st.session_state[length_key] = float(project_device["length_um"])
+        if cox_key not in st.session_state:
+            st.session_state[cox_key] = float(project_device["cox_nf_cm2"])
+
+        operating_mode = st.sidebar.radio(
+            "Operating Mode",
+            ["Linear", "Saturation"],
+            key=mode_key,
+            horizontal=True,
+            on_change=save_project_device_widget,
+            args=(active_project, "operating_mode", mode_key),
+        )
+        W = st.sidebar.number_input(
+            "Width (μm)",
+            min_value=0.000001,
+            step=50.0,
+            key=width_key,
+            on_change=save_project_device_widget,
+            args=(active_project, "width_um", width_key),
+        )
+        L = st.sidebar.number_input(
+            "Length (μm)",
+            min_value=0.000001,
+            step=50.0,
+            key=length_key,
+            on_change=save_project_device_widget,
+            args=(active_project, "length_um", length_key),
+        )
+        Cox_nf = st.sidebar.number_input(
+            "Capacitance (nF/cm⁻²)",
+            min_value=0.000001,
+            key=cox_key,
+            on_change=save_project_device_widget,
+            args=(active_project, "cox_nf_cm2", cox_key),
+        )
+
+        # Keep model storage synchronized even before a callback fires.
+        project_device["operating_mode"] = operating_mode
+        project_device["width_um"] = float(W)
+        project_device["length_um"] = float(L)
+        project_device["cox_nf_cm2"] = float(Cox_nf)
+    else:
+        operating_mode = "Linear"
+        W = 1050.0
+        L = 100.0
+        Cox_nf = 34.5
+        st.sidebar.caption("프로젝트를 선택하면 값을 수정할 수 있습니다.")
+
+    Cox = float(Cox_nf) * 1e-9
+    st.sidebar.markdown("---")
+
+    # Populated after an Excel file is available.
+    sheet_selector_slot = st.sidebar.container()
+
+    # ============================================================
+
     if active_logs:
         st.sidebar.download_button(
             "Export Project to Excel",
@@ -945,82 +1018,19 @@ else:
     st.session_state["active_log_folder"] = None
     st.sidebar.info("먼저 개인 프로젝트를 생성하세요.")
 
-st.sidebar.markdown("---")
-
-# ============================================================
-# Project-specific Device Information
-# ============================================================
-st.sidebar.header("Device Information")
-
-if active_project:
-    project_device = ensure_project_device_settings(active_project)
-
-    mode_key = f"operating_mode_widget__{active_project}"
-    width_key = f"width_widget__{active_project}"
-    length_key = f"length_widget__{active_project}"
-    cox_key = f"cox_widget__{active_project}"
-
-    # Rebuild project-specific widgets from that project's stored values.
-    if mode_key not in st.session_state:
-        st.session_state[mode_key] = project_device["operating_mode"]
-    if width_key not in st.session_state:
-        st.session_state[width_key] = float(project_device["width_um"])
-    if length_key not in st.session_state:
-        st.session_state[length_key] = float(project_device["length_um"])
-    if cox_key not in st.session_state:
-        st.session_state[cox_key] = float(project_device["cox_nf_cm2"])
-
-    operating_mode = st.sidebar.radio(
-        "Operating Mode",
-        ["Linear", "Saturation"],
-        key=mode_key,
-        horizontal=True,
-        on_change=save_project_device_widget,
-        args=(active_project, "operating_mode", mode_key),
-    )
-    W = st.sidebar.number_input(
-        "Width (μm)",
-        min_value=0.000001,
-        step=50.0,
-        key=width_key,
-        on_change=save_project_device_widget,
-        args=(active_project, "width_um", width_key),
-    )
-    L = st.sidebar.number_input(
-        "Length (μm)",
-        min_value=0.000001,
-        step=50.0,
-        key=length_key,
-        on_change=save_project_device_widget,
-        args=(active_project, "length_um", length_key),
-    )
-    Cox_nf = st.sidebar.number_input(
-        "Capacitance (nF/cm⁻²)",
-        min_value=0.000001,
-        key=cox_key,
-        on_change=save_project_device_widget,
-        args=(active_project, "cox_nf_cm2", cox_key),
-    )
-
-    # Keep model storage synchronized even before a callback fires.
-    project_device["operating_mode"] = operating_mode
-    project_device["width_um"] = float(W)
-    project_device["length_um"] = float(L)
-    project_device["cox_nf_cm2"] = float(Cox_nf)
-else:
+    st.sidebar.markdown("---")
+    st.sidebar.header("Device Information")
     operating_mode = "Linear"
     W = 1050.0
     L = 100.0
     Cox_nf = 34.5
+    Cox = Cox_nf * 1e-9
     st.sidebar.caption("프로젝트를 선택하면 값을 수정할 수 있습니다.")
+    st.sidebar.markdown("---")
+    sheet_selector_slot = st.sidebar.container()
 
-Cox = float(Cox_nf) * 1e-9
 st.sidebar.markdown("---")
 
-# Populated after an Excel file is available.
-sheet_selector_slot = st.sidebar.container()
-
-# ============================================================
 # Helpers
 # ============================================================
 def fix_inf(values):
