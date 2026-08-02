@@ -3,6 +3,7 @@ import io
 import re
 import uuid
 import pickle
+import base64
 from pathlib import Path
 from datetime import datetime
 from openpyxl.styles import PatternFill, Font, Alignment
@@ -10,6 +11,11 @@ from openpyxl.utils import get_column_letter
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+try:
+    from supabase import create_client
+except ImportError:
+    create_client = None
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -345,28 +351,83 @@ def _default_persistent_state():
     }
 
 
-def load_projects_state():
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    if not STORAGE_FILE.exists():
-        return _default_persistent_state()
+def get_supabase_client():
+    """Return a cached Supabase client when Streamlit Secrets are configured."""
+    if create_client is None:
+        return None
 
     try:
-        with STORAGE_FILE.open("rb") as handle:
-            data = pickle.load(handle)
-        if not isinstance(data, dict):
-            return _default_persistent_state()
-        data.setdefault("folders", {})
-        data.setdefault("active_folder", None)
-        data.setdefault("active_log_id", None)
-        data.setdefault("project_device_settings", {})
-        data.setdefault("project_workspaces", {})
-        return data
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
     except Exception:
-        return _default_persistent_state()
+        return None
+
+    cache_key = "_supabase_client"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = create_client(url, key)
+    return st.session_state[cache_key]
+
+
+def serialize_persistent_state(data):
+    raw = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+    return base64.b64encode(raw).decode("ascii")
+
+
+def deserialize_persistent_state(payload):
+    raw = base64.b64decode(payload.encode("ascii"))
+    data = pickle.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("Invalid persistent state")
+    return data
+
+
+def normalize_persistent_state(data):
+    if not isinstance(data, dict):
+        data = _default_persistent_state()
+    data.setdefault("folders", {})
+    data.setdefault("active_folder", None)
+    data.setdefault("active_log_id", None)
+    data.setdefault("project_device_settings", {})
+    data.setdefault("project_workspaces", {})
+    return data
+
+
+def load_projects_state():
+    """Load permanent state from Supabase; fall back to local file if needed."""
+    client = get_supabase_client()
+    if client is not None:
+        try:
+            response = (
+                client.table("fet_app_state")
+                .select("payload")
+                .eq("state_key", "main")
+                .limit(1)
+                .execute()
+            )
+            rows = response.data or []
+            if rows and rows[0].get("payload"):
+                return normalize_persistent_state(
+                    deserialize_persistent_state(rows[0]["payload"])
+                )
+        except Exception as exc:
+            st.session_state["persistence_warning"] = (
+                f"Supabase 불러오기 실패: {exc}"
+            )
+
+    # Local fallback is useful for local development, but Streamlit Cloud
+    # should use Supabase because its local disk is not permanent.
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    if STORAGE_FILE.exists():
+        try:
+            with STORAGE_FILE.open("rb") as handle:
+                return normalize_persistent_state(pickle.load(handle))
+        except Exception:
+            pass
+    return _default_persistent_state()
 
 
 def save_projects_state():
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    """Persist projects, logs, settings and uploaded Excel bytes to Supabase."""
     payload = {
         "folders": st.session_state.get("analysis_log_folders", {}),
         "active_folder": st.session_state.get("active_log_folder"),
@@ -378,6 +439,31 @@ def save_projects_state():
             "project_workspaces", {}
         ),
     }
+
+    encoded = serialize_persistent_state(payload)
+    client = get_supabase_client()
+    if client is not None:
+        try:
+            (
+                client.table("fet_app_state")
+                .upsert(
+                    {
+                        "state_key": "main",
+                        "payload": encoded,
+                    },
+                    on_conflict="state_key",
+                )
+                .execute()
+            )
+            st.session_state["persistence_status"] = "Supabase 저장 완료"
+            return
+        except Exception as exc:
+            st.session_state["persistence_warning"] = (
+                f"Supabase 저장 실패: {exc}"
+            )
+
+    # Local fallback for development only.
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     temp_file = STORAGE_FILE.with_suffix(".tmp")
     try:
         with temp_file.open("wb") as handle:
@@ -389,7 +475,6 @@ def save_projects_state():
                 temp_file.unlink()
             except Exception:
                 pass
-
 
 def initialize_log_state():
     if "analysis_log_folders" not in st.session_state:
@@ -788,6 +873,9 @@ def safe_excel_filename(name):
 
 
 initialize_log_state()
+
+if st.session_state.get("persistence_warning"):
+    st.sidebar.warning(st.session_state.pop("persistence_warning"))
 
 
 def restore_log_state(record, folder_name=None):
