@@ -19,8 +19,8 @@ except ImportError:
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -351,8 +351,15 @@ def _default_persistent_state():
     }
 
 
+@st.cache_resource(show_spinner=False)
+def _build_supabase_client(url, key):
+    if create_client is None:
+        return None
+    return create_client(url, key)
+
+
 def get_supabase_client():
-    """Return a cached Supabase client when Streamlit Secrets are configured."""
+    """Return one cached Supabase client for the whole app process."""
     if create_client is None:
         return None
 
@@ -362,10 +369,7 @@ def get_supabase_client():
     except Exception:
         return None
 
-    cache_key = "_supabase_client"
-    if cache_key not in st.session_state:
-        st.session_state[cache_key] = create_client(url, key)
-    return st.session_state[cache_key]
+    return _build_supabase_client(url, key)
 
 
 def serialize_persistent_state(data):
@@ -392,6 +396,110 @@ def normalize_persistent_state(data):
     return data
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_deserialize_persistent_state(payload):
+    return normalize_persistent_state(
+        deserialize_persistent_state(payload)
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def cached_excel_sheet_names(file_bytes):
+    with io.BytesIO(file_bytes) as buffer:
+        return pd.ExcelFile(buffer).sheet_names
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def cached_read_excel_sheet(file_bytes, sheet_name, header=0):
+    with io.BytesIO(file_bytes) as buffer:
+        return pd.read_excel(
+            buffer,
+            sheet_name=sheet_name,
+            header=header,
+        )
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_settings_drain_v(file_bytes, selected_sheet):
+    """Cached Settings lookup; avoids reparsing Settings on every rerun."""
+    try:
+        sheet_names = cached_excel_sheet_names(file_bytes)
+        settings_sheet = next(
+            (
+                name for name in sheet_names
+                if name.strip().lower() == "settings"
+            ),
+            None,
+        )
+        if settings_sheet is None:
+            return None
+
+        raw = cached_read_excel_sheet(
+            file_bytes, settings_sheet, header=None
+        )
+    except Exception:
+        return None
+
+    rows, cols = raw.shape
+    selected_norm = normalize_excel_label(selected_sheet or "")
+    anchors = []
+
+    if selected_norm:
+        for row_idx in range(rows):
+            for col_idx in range(cols):
+                if (
+                    normalize_excel_label(
+                        raw.iat[row_idx, col_idx]
+                    )
+                    == selected_norm
+                ):
+                    anchors.append((row_idx, col_idx))
+
+    if not anchors:
+        anchors = [(0, 0)]
+
+    for anchor_row, _ in anchors:
+        row_start = max(0, anchor_row - 3)
+        row_end = min(rows, anchor_row + 80)
+        name_row = None
+        start_level_row = None
+
+        for row_idx in range(row_start, row_end):
+            token = normalize_excel_label(raw.iat[row_idx, 0])
+            if token == "name":
+                name_row = row_idx
+            elif token in {"startlevel", "start", "level"}:
+                start_level_row = row_idx
+
+        if name_row is None or start_level_row is None:
+            continue
+
+        drain_v_col = None
+        for col_idx in range(cols):
+            token = normalize_excel_label(
+                raw.iat[name_row, col_idx]
+            )
+            if token in {
+                "drainv", "drainvoltage", "vd", "vds"
+            }:
+                drain_v_col = col_idx
+                break
+
+        if drain_v_col is None:
+            continue
+
+        value = pd.to_numeric(
+            pd.Series(
+                [raw.iat[start_level_row, drain_v_col]]
+            ),
+            errors="coerce",
+        ).iloc[0]
+        if pd.notna(value):
+            return float(value)
+
+    return None
+
+
 def load_projects_state():
     """Load permanent state from Supabase; fall back to local file if needed."""
     client = get_supabase_client()
@@ -406,8 +514,8 @@ def load_projects_state():
             )
             rows = response.data or []
             if rows and rows[0].get("payload"):
-                return normalize_persistent_state(
-                    deserialize_persistent_state(rows[0]["payload"])
+                return cached_deserialize_persistent_state(
+                    rows[0]["payload"]
                 )
         except Exception as exc:
             st.session_state["persistence_warning"] = (
@@ -441,6 +549,16 @@ def save_projects_state():
     }
 
     encoded = serialize_persistent_state(payload)
+
+    # Skip identical remote writes. Slider reruns can otherwise issue many
+    # expensive Supabase upserts with exactly the same payload.
+    payload_hash = str(hash(encoded))
+    if (
+        st.session_state.get("_last_persisted_payload_hash")
+        == payload_hash
+    ):
+        return
+
     client = get_supabase_client()
     if client is not None:
         try:
@@ -455,7 +573,12 @@ def save_projects_state():
                 )
                 .execute()
             )
-            st.session_state["persistence_status"] = "Supabase 저장 완료"
+            st.session_state[
+                "_last_persisted_payload_hash"
+            ] = payload_hash
+            st.session_state["persistence_status"] = (
+                "Supabase 저장 완료"
+            )
             return
         except Exception as exc:
             st.session_state["persistence_warning"] = (
@@ -538,7 +661,6 @@ def default_project_workspace():
         "active_log_id": None,
         "uploader_generation": 0,
         "selected_sheet": None,
-        "active_batch_id": None,
     }
 
 
@@ -578,9 +700,6 @@ def save_current_workspace(project_name):
     workspace["selected_sheet"] = st.session_state.get(
         "current_selected_sheet"
     )
-    workspace["active_batch_id"] = st.session_state.get(
-        "active_batch_id"
-    )
     save_projects_state()
 
 
@@ -614,16 +733,27 @@ def load_project_workspace(project_name):
         st.session_state["restored_sheet"] = selected_sheet
     else:
         st.session_state.pop("restored_sheet", None)
-    st.session_state["active_batch_id"] = workspace.get("active_batch_id")
 
 
-def update_active_project_workspace(**updates):
+def update_active_project_workspace(
+    persist=False,
+    **updates,
+):
+    """Update in-memory workspace; persist only on explicit save actions."""
     project_name = st.session_state.get("active_log_folder")
     if not project_name:
         return
+
     workspace = ensure_project_workspace(project_name)
-    workspace.update(updates)
-    save_projects_state()
+    changed = any(
+        workspace.get(key) != value
+        for key, value in updates.items()
+    )
+    if changed:
+        workspace.update(updates)
+
+    if persist and changed:
+        save_projects_state()
 
 
 def ensure_project_device_settings(project_name):
@@ -779,7 +909,6 @@ def sci_plain(value, digits=2):
 
 EXPORT_COLUMNS = [
     "File",
-    "Data",
     "Drain voltage",
     "Linear or saturation",
     "Gate voltage range",
@@ -793,80 +922,6 @@ EXPORT_COLUMNS = [
 ]
 
 
-def _saved_at_sort_value(record):
-    """Sortable timestamp; malformed/legacy records remain at the beginning."""
-    value = str(record.get("Saved at", ""))
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return datetime.min
-
-
-def _workbook_sheet_order(record):
-    """Return original analyzable worksheet order from the saved Excel bytes."""
-    file_bytes = record.get("_file_bytes")
-    if not file_bytes:
-        return []
-    try:
-        with io.BytesIO(file_bytes) as buffer:
-            names = pd.ExcelFile(buffer).sheet_names
-        return [
-            name for name in names
-            if name.strip().lower() not in {"calc", "settings"}
-        ]
-    except Exception:
-        return []
-
-
-def _ordered_latest_project_records(records):
-    """Latest row per batch/sheet, ordered exactly like each source workbook.
-
-    A workbook added with Add to Project has one shared _batch_id.  Save updates
-    those records.  For legacy/duplicate records, only the latest saved value
-    for the same batch and worksheet is exported.
-    """
-    if not records:
-        return []
-
-    # Preserve project insertion order of files/batches.
-    batch_order = []
-    records_by_batch = {}
-    for position, record in enumerate(records):
-        batch_id = record.get("_batch_id") or record.get("_log_id") or f"legacy_{position}"
-        if batch_id not in records_by_batch:
-            batch_order.append(batch_id)
-            records_by_batch[batch_id] = []
-        records_by_batch[batch_id].append(record)
-
-    ordered = []
-    for batch_id in batch_order:
-        batch_records = records_by_batch[batch_id]
-
-        # Select the newest value for every worksheet.
-        latest_by_sheet = {}
-        for record in batch_records:
-            sheet = str(record.get("Sheet", ""))
-            previous = latest_by_sheet.get(sheet)
-            if previous is None or _saved_at_sort_value(record) >= _saved_at_sort_value(previous):
-                latest_by_sheet[sheet] = record
-
-        # Recover the original worksheet ordering from the workbook itself.
-        representative = max(batch_records, key=_saved_at_sort_value)
-        source_order = _workbook_sheet_order(representative)
-        order_index = {name: index for index, name in enumerate(source_order)}
-
-        sorted_records = sorted(
-            latest_by_sheet.values(),
-            key=lambda record: (
-                order_index.get(str(record.get("Sheet", "")), len(order_index)),
-                str(record.get("Sheet", "")),
-            ),
-        )
-        ordered.extend(sorted_records)
-
-    return ordered
-
-
 def log_dataframe(folder_name):
     folders = st.session_state["analysis_log_folders"]
     records = folders.get(folder_name, [])
@@ -874,10 +929,9 @@ def log_dataframe(folder_name):
         return pd.DataFrame(columns=EXPORT_COLUMNS)
 
     rows = []
-    for record in _ordered_latest_project_records(records):
+    for record in records:
         rows.append({
             "File": record.get("File", ""),
-            "Data": record.get("Sheet", ""),
             "Drain voltage": record.get("Drain voltage (V)", np.nan),
             "Linear or saturation": record.get("Operating mode", ""),
             "Gate voltage range": record.get("Gate voltage range", ""),
@@ -971,7 +1025,6 @@ def restore_log_state(record, folder_name=None):
 
     st.session_state["restored_log_id"] = record.get("_log_id")
     st.session_state["persistent_active_log_id"] = record.get("_log_id")
-    st.session_state["active_batch_id"] = record.get("_batch_id", record.get("_log_id"))
     st.session_state["restored_selected_direction"] = record.get(
         "_selected_direction", "Forward"
     )
@@ -986,7 +1039,6 @@ def restore_log_state(record, folder_name=None):
         )
         workspace["active_file_source"] = "log"
         workspace["active_log_id"] = record.get("_log_id")
-        workspace["active_batch_id"] = record.get("_batch_id", record.get("_log_id"))
     # Change the uploader widget key whenever a log is opened. This destroys
     # the stale uploader instance that still contains a previously uploaded
     # file, so later slider edits/reruns cannot switch back to that file.
@@ -1254,10 +1306,7 @@ if project_names:
                 if len(raw_file_name) <= 24
                 else raw_file_name[:21] + "…"
             )
-            sheet_label = str(log_record.get("Sheet", ""))
             log_label = f"📄 {compact_file_name}"
-            if sheet_label:
-                log_label += f" · {sheet_label}"
             if saved_time:
                 log_label += f"  {saved_time}"
 
@@ -1452,6 +1501,27 @@ def calc_curves(vg, current, mode, w, l, cox, vd):
 
     return gm, mobility
 
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def cached_calc_curves(
+    vg_tuple,
+    current_tuple,
+    mode,
+    w,
+    l,
+    cox,
+    vd,
+):
+    return calc_curves(
+        np.asarray(vg_tuple, dtype=float),
+        np.asarray(current_tuple, dtype=float),
+        mode,
+        float(w),
+        float(l),
+        float(cox),
+        float(vd),
+    )
 
 def auto_peak_index(mobility):
     """Detect the most abnormal local change, not the absolute maximum.
@@ -1759,13 +1829,31 @@ def analyze_sheet(df, file_id, sheet_name):
     if len(fwd) < 3 or len(bwd) < 3:
         raise ValueError("점 제거 후 각 sweep에 최소 3개의 데이터가 필요합니다.")
 
-    gm_fwd, mu_fwd = calc_curves(
-        fwd["GateV"], fwd["DrainI_active"],
-        operating_mode, W, L, Cox, vd
+    gm_fwd, mu_fwd = cached_calc_curves(
+        tuple(
+            pd.to_numeric(
+                fwd["GateV"], errors="coerce"
+            ).to_numpy(dtype=float)
+        ),
+        tuple(
+            pd.to_numeric(
+                fwd["DrainI_active"], errors="coerce"
+            ).to_numpy(dtype=float)
+        ),
+        operating_mode, W, L, Cox, vd,
     )
-    gm_bwd, mu_bwd = calc_curves(
-        bwd["GateV"], bwd["DrainI_active"],
-        operating_mode, W, L, Cox, vd
+    gm_bwd, mu_bwd = cached_calc_curves(
+        tuple(
+            pd.to_numeric(
+                bwd["GateV"], errors="coerce"
+            ).to_numpy(dtype=float)
+        ),
+        tuple(
+            pd.to_numeric(
+                bwd["DrainI_active"], errors="coerce"
+            ).to_numpy(dtype=float)
+        ),
+        operating_mode, W, L, Cox, vd,
     )
 
     # Peak Elimination target: strongest isolated local anomaly.
@@ -2142,6 +2230,7 @@ if uploader_value is not None:
         st.session_state["persistent_active_log_id"] = None
         st.session_state.pop("restored_log_id", None)
         update_active_project_workspace(
+            persist=True,
             active_file_bytes=new_upload_bytes,
             active_file_name=getattr(
                 uploader_value, "name", "uploaded.xlsx"
@@ -2182,10 +2271,23 @@ with main_content:
                 except Exception:
                     file_size = 0
         file_id = f"{file_name}_{file_size}"
-        xls = pd.ExcelFile(uploaded_file)
+
+        try:
+            uploaded_file.seek(0)
+            active_excel_bytes = uploaded_file.read()
+            uploaded_file.seek(0)
+        except Exception:
+            active_excel_bytes = st.session_state.get(
+                "active_file_bytes", b""
+            )
+
+        sheet_names = cached_excel_sheet_names(
+            active_excel_bytes
+        )
         target_sheets = [
-            sheet_name for sheet_name in xls.sheet_names
-            if sheet_name.strip().lower() not in {"calc", "settings"}
+            sheet_name for sheet_name in sheet_names
+            if sheet_name.strip().lower()
+            not in {"calc", "settings"}
         ]
 
         if not target_sheets:
@@ -2225,7 +2327,10 @@ with main_content:
             rows = []
 
             for sheet in target_sheets:
-                df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
+                df_sheet = cached_read_excel_sheet(
+                    active_excel_bytes,
+                    sheet,
+                ).copy()
                 if {"GateV", "DrainI", "DrainV"}.issubset(df_sheet.columns):
                     try:
                         result = analyze_sheet(df_sheet, file_id, sheet)
@@ -2273,7 +2378,10 @@ with main_content:
         # ========================================================
         else:
             df = standardize_measurement_columns(
-                xls.parse(selected_sheet)
+                cached_read_excel_sheet(
+                    active_excel_bytes,
+                    selected_sheet,
+                ).copy()
             )
 
             if not {"GateV", "DrainI"}.issubset(df.columns):
@@ -2281,7 +2389,10 @@ with main_content:
                 st.stop()
 
             if "DrainV" not in df.columns:
-                settings_drain_v = extract_drain_v_from_settings(xls, selected_sheet)
+                settings_drain_v = cached_settings_drain_v(
+                    active_excel_bytes,
+                    selected_sheet,
+                )
                 if settings_drain_v is None:
                     st.error(
                         "선택한 시트에 DrainV가 없고 Settings 시트에서도 "
@@ -2863,182 +2974,220 @@ with main_content:
                     elimination_default_vg,
                 )
 
-            def build_sheet_log_entry(sheet_name, log_id=None, batch_id=None):
-                sheet_df = standardize_measurement_columns(xls.parse(sheet_name))
-                if not {"GateV", "DrainI"}.issubset(sheet_df.columns):
-                    raise ValueError(f"{sheet_name}: GateV와 DrainI 컬럼이 필요합니다.")
-                if "DrainV" not in sheet_df.columns:
-                    sheet_drain_v = extract_drain_v_from_settings(xls, sheet_name)
-                    if sheet_drain_v is None:
-                        raise ValueError(f"{sheet_name}: DrainV를 찾지 못했습니다.")
-                    sheet_df["DrainV"] = float(sheet_drain_v)
-                sheet_res = analyze_sheet(sheet_df, file_id, sheet_name)
-                skeys = sheet_res["keys"]
-
-                def eval_dir(name, short, sweep, mu, gm, auto_idx):
-                    fwd = name == "Forward"
-                    peak_key = skeys["peak_slider_fwd"] if fwd else skeys["peak_slider_bwd"]
-                    ss_key = skeys["ss_slider_fwd"] if fwd else skeys["ss_slider_bwd"]
-                    ss_start_key = skeys["ss_range_start_fwd"] if fwd else skeys["ss_range_start_bwd"]
-                    ss_end_key = skeys["ss_range_end_fwd"] if fwd else skeys["ss_range_end_bwd"]
-                    remove_key = skeys["remove_slider_fwd"] if fwd else skeys["remove_slider_bwd"]
-                    log_remove_key = skeys["log_remove_slider_fwd"] if fwd else skeys["log_remove_slider_bwd"]
-                    finite_mu = np.where(np.isfinite(mu), mu, -np.inf)
-                    max_idx = int(np.argmax(finite_mu)) if np.any(np.isfinite(mu)) else 0
-                    initialize_slider_in_range(peak_key, sweep, float(sweep["GateV"].iloc[max_idx]))
-                    peak_idx = int((sweep["GateV"] - float(st.session_state[peak_key])).abs().idxmin())
-                    peak_vg = float(sweep["GateV"].iloc[peak_idx])
-                    st.session_state[peak_key] = peak_vg
-                    abs_i = np.abs(pd.to_numeric(sweep["DrainI_active"], errors="coerce").to_numpy(float))
-                    on_auto = int(np.nanargmax(abs_i))
-                    posmask = np.isfinite(abs_i) & (abs_i > 0)
-                    off_auto = int(np.where(posmask)[0][np.argmin(abs_i[posmask])]) if posmask.any() else on_auto
-                    on_key = f"on_slider_{short}_{file_id}_{sheet_name}_{operating_mode}"
-                    off_key = f"off_slider_{short}_{file_id}_{sheet_name}_{operating_mode}"
-                    initialize_slider_in_range(on_key, sweep, float(sweep["GateV"].iloc[on_auto]))
-                    initialize_slider_in_range(off_key, sweep, float(sweep["GateV"].iloc[off_auto]))
-                    _, on_row, on_density = current_density_at_vg(sweep, st.session_state[on_key], W)
-                    _, off_row, off_density = current_density_at_vg(sweep, st.session_state[off_key], W)
-                    on_current = abs(float(on_row["DrainI_active"]))
-                    off_current = abs(float(off_row["DrainI_active"]))
-                    onoff = on_current / off_current if np.isfinite(off_current) and off_current > 0 else np.nan
-                    ss_vals = ss_curve(sweep["DrainI_active"], sweep["GateV"])
-                    vg_arr = pd.to_numeric(sweep["GateV"], errors="coerce").to_numpy(float)
-                    vg_min, vg_max = float(np.nanmin(vg_arr)), float(np.nanmax(vg_arr))
-                    st.session_state.setdefault(ss_start_key, vg_min)
-                    st.session_state.setdefault(ss_end_key, vg_max)
-                    low = max(vg_min, min(float(st.session_state[ss_start_key]), float(st.session_state[ss_end_key])))
-                    high = min(vg_max, max(float(st.session_state[ss_start_key]), float(st.session_state[ss_end_key])))
-                    mask = np.isfinite(ss_vals) & (vg_arr >= low) & (vg_arr <= high)
-                    if mask.any():
-                        cand = np.where(mask)[0]; ss_auto = int(cand[np.argmin(ss_vals[cand])])
-                    else:
-                        finite = np.where(np.isfinite(ss_vals))[0]; ss_auto = int(finite[0]) if len(finite) else peak_idx
-                    initialize_slider_in_range(ss_key, sweep, float(sweep["GateV"].iloc[ss_auto]))
-                    ss_idx = int((sweep["GateV"] - float(st.session_state[ss_key])).abs().idxmin())
-                    ss_vg = float(sweep["GateV"].iloc[ss_idx]); st.session_state[ss_key] = ss_vg
-                    ss_value = float(ss_vals[ss_idx]) if np.isfinite(ss_vals[ss_idx]) else np.nan
-                    vth = vth_at_index(sweep["GateV"], sweep["DrainI_active"], gm, peak_idx, operating_mode)
-                    elim_default = float(sweep["GateV"].iloc[auto_idx])
-                    initialize_slider_in_range(remove_key, sweep, elim_default)
-                    initialize_slider_in_range(log_remove_key, sweep, elim_default)
-                    return dict(peak_vg=peak_vg, mobility=float(mu[peak_idx]), vth=float(vth), ss=ss_value,
-                                ss_vg=ss_vg, ss_start=float(st.session_state[ss_start_key]), ss_end=float(st.session_state[ss_end_key]),
-                                on_vg=float(on_row["GateV"]), off_vg=float(off_row["GateV"]), on_density=float(on_density),
-                                off_density=float(off_density), onoff=float(onoff), remove_vg=float(st.session_state[remove_key]),
-                                log_remove_vg=float(st.session_state[log_remove_key]))
-
-                sf = eval_dir("Forward", "fwd", sheet_res["fwd"], sheet_res["mu_fwd"], sheet_res["gm_fwd"], sheet_res["auto_idx_f"])
-                sr = eval_dir("Reverse", "rev", sheet_res["bwd"], sheet_res["mu_bwd"], sheet_res["gm_bwd"], sheet_res["auto_idx_b"])
-                hyst = abs(sf["vth"] - sr["vth"]) if np.isfinite(sf["vth"]) and np.isfinite(sr["vth"]) else np.nan
+            def build_current_log_entry(log_id=None):
+                if current_project:
+                    current_settings = ensure_project_device_settings(
+                        current_project
+                    )
+                    current_settings["operating_mode"] = operating_mode
+                    current_settings["width_um"] = float(W)
+                    current_settings["length_um"] = float(L)
+                    current_settings["cox_nf_cm2"] = float(Cox_nf)
                 try:
-                    uploaded_file.seek(0); file_bytes = uploaded_file.read(); uploaded_file.seek(0)
+                    uploaded_file.seek(0)
+                    saved_file_bytes = uploaded_file.read()
+                    uploaded_file.seek(0)
                 except Exception:
-                    file_bytes = st.session_state.get("active_file_bytes")
-                fname = getattr(uploaded_file, "name", st.session_state.get("active_file_name", "restored.xlsx"))
-                bid = batch_id or st.session_state.get("active_batch_id") or str(uuid.uuid4())
-                direction = st.session_state.get(f"direction_view_{file_id}_{sheet_name}_{operating_mode}", "Forward")
-                fwd, rev = sheet_res["fwd"], sheet_res["bwd"]
+                    saved_file_bytes = st.session_state.get(
+                        "active_file_bytes"
+                    )
+
+                active_analysis_file_name = getattr(
+                    uploaded_file,
+                    "name",
+                    st.session_state.get(
+                        "active_file_name", "restored.xlsx"
+                    ),
+                )
+
                 return {
-                    "_log_id": log_id or str(uuid.uuid4()), "_batch_id": bid, "_project_name": current_project,
-                    "_selected_direction": direction, "_file_bytes": file_bytes,
-                    "_removed_fwd_indices": list(st.session_state.get(skeys["removed_fwd"], [])),
-                    "_removed_bwd_indices": list(st.session_state.get(skeys["removed_bwd"], [])),
-                    "_on_vg_fwd": sf["on_vg"], "_on_vg_rev": sr["on_vg"], "_off_vg_fwd": sf["off_vg"], "_off_vg_rev": sr["off_vg"],
-                    "_vth_vg_fwd": sf["peak_vg"], "_vth_vg_rev": sr["peak_vg"], "_ss_vg_fwd": sf["ss_vg"], "_ss_vg_rev": sr["ss_vg"],
-                    "_ss_range_start_fwd": sf["ss_start"], "_ss_range_end_fwd": sf["ss_end"],
-                    "_ss_range_start_rev": sr["ss_start"], "_ss_range_end_rev": sr["ss_end"],
-                    "_mobility_remove_vg_fwd": sf["remove_vg"], "_mobility_remove_vg_rev": sr["remove_vg"],
-                    "_log_remove_vg_fwd": sf["log_remove_vg"], "_log_remove_vg_rev": sr["log_remove_vg"],
-                    "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "File": fname, "Sheet": sheet_name,
-                    "Operating mode": operating_mode, "Width (μm)": float(W), "Length (μm)": float(L), "Cox (nF/cm²)": float(Cox_nf),
-                    "Drain voltage (V)": float(sheet_res["vd"]),
-                    "Gate voltage range": f"{float(min(fwd['GateV'].min(), rev['GateV'].min())):.2f} to {float(max(fwd['GateV'].max(), rev['GateV'].max())):.2f} V",
-                    "Gate voltage step (V)": float(np.median(np.abs(np.diff(fwd["GateV"])))) if len(fwd) > 1 else np.nan,
-                    "Forward mobility (cm²/V·s)": sf["mobility"], "Forward Vth (V)": sf["vth"], "Forward peak Vg (V)": sf["peak_vg"],
-                    "Forward SS (mV/dec)": sf["ss"], "Forward ON/OFF ratio": sf["onoff"],
-                    "Forward ON current / Width (A/μm)": sf["on_density"], "Forward OFF current / Width (A/μm)": sf["off_density"],
-                    "Backward mobility (cm²/V·s)": sr["mobility"], "Backward Vth (V)": sr["vth"], "Backward peak Vg (V)": sr["peak_vg"],
-                    "Backward SS (mV/dec)": sr["ss"], "Backward ON/OFF ratio": sr["onoff"],
-                    "Backward ON current / Width (A/μm)": sr["on_density"], "Backward OFF current / Width (A/μm)": sr["off_density"],
-                    "Hysteresis (V)": float(hyst), "ON/OFF ratio": sf["onoff"],
-                    "ON current / Width (A/μm)": sf["on_density"], "OFF current / Width (A/μm)": sf["off_density"],
-                    "Selected Forward Vg (V)": sf["on_vg"], "Selected Backward Vg (V)": sr["on_vg"],
+                    "_log_id": log_id or str(uuid.uuid4()),
+                    "_project_name": current_project,
+                    "_selected_direction": selected_direction,
+                    "_file_bytes": saved_file_bytes,
+                    "_removed_fwd_indices": list(
+                        st.session_state[keys["removed_fwd"]]
+                    ),
+                    "_removed_bwd_indices": list(
+                        st.session_state[keys["removed_bwd"]]
+                    ),
+                    "_on_vg_fwd": float(f_state["on_row"]["GateV"]),
+                    "_on_vg_rev": float(r_state["on_row"]["GateV"]),
+                    "_off_vg_fwd": float(f_state["off_row"]["GateV"]),
+                    "_off_vg_rev": float(r_state["off_row"]["GateV"]),
+                    "_vth_vg_fwd": float(f_state["vth_vg"]),
+                    "_vth_vg_rev": float(r_state["vth_vg"]),
+                    "_ss_vg_fwd": float(f_state["ss_vg"]),
+                    "_ss_vg_rev": float(r_state["ss_vg"]),
+                    "_ss_range_start_fwd": float(
+                        st.session_state[f_state["ss_range_start_key"]]
+                    ),
+                    "_ss_range_end_fwd": float(
+                        st.session_state[f_state["ss_range_end_key"]]
+                    ),
+                    "_ss_range_start_rev": float(
+                        st.session_state[r_state["ss_range_start_key"]]
+                    ),
+                    "_ss_range_end_rev": float(
+                        st.session_state[r_state["ss_range_end_key"]]
+                    ),
+                    "_mobility_remove_vg_fwd": float(
+                        st.session_state[f_state["remove_key"]]
+                    ),
+                    "_mobility_remove_vg_rev": float(
+                        st.session_state[r_state["remove_key"]]
+                    ),
+                    "_log_remove_vg_fwd": float(
+                        st.session_state[f_state["log_remove_key"]]
+                    ),
+                    "_log_remove_vg_rev": float(
+                        st.session_state[r_state["log_remove_key"]]
+                    ),
+                    "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "File": active_analysis_file_name,
+                    "Sheet": selected_sheet,
+                    "Operating mode": operating_mode,
+                    "Width (μm)": float(W),
+                    "Length (μm)": float(L),
+                    "Cox (nF/cm²)": float(Cox_nf),
+                    "Drain voltage (V)": float(res["vd"]),
+                    "Gate voltage range": (
+                        f"{float(min(fwd['GateV'].min(), bwd['GateV'].min())):.2f} "
+                        f"to {float(max(fwd['GateV'].max(), bwd['GateV'].max())):.2f} V"
+                    ),
+                    "Gate voltage step (V)": float(
+                        np.median(np.abs(np.diff(fwd["GateV"])))
+                    ) if len(fwd) > 1 else np.nan,
+                    "Forward mobility (cm²/V·s)": float(f_state["mobility"]),
+                    "Forward Vth (V)": float(f_state["vth"]),
+                    "Forward peak Vg (V)": float(f_state["peak_vg"]),
+                    "Forward SS (mV/dec)": float(f_state["ss"]),
+                    "Forward ON/OFF ratio": float(f_state["onoff"]),
+                    "Forward ON current / Width (A/μm)": float(f_state["on_density"]),
+                    "Forward OFF current / Width (A/μm)": float(f_state["off_density"]),
+                    "Backward mobility (cm²/V·s)": float(r_state["mobility"]),
+                    "Backward Vth (V)": float(r_state["vth"]),
+                    "Backward peak Vg (V)": float(r_state["peak_vg"]),
+                    "Backward SS (mV/dec)": float(r_state["ss"]),
+                    "Backward ON/OFF ratio": float(r_state["onoff"]),
+                    "Backward ON current / Width (A/μm)": float(r_state["on_density"]),
+                    "Backward OFF current / Width (A/μm)": float(r_state["off_density"]),
+                    "Hysteresis (V)": float(selected_hysteresis),
+                    "ON/OFF ratio": float(f_state["onoff"]),
+                    "ON current / Width (A/μm)": float(f_state["on_density"]),
+                    "OFF current / Width (A/μm)": float(f_state["off_density"]),
+                    "Selected Forward Vg (V)": float(f_state["on_row"]["GateV"]),
+                    "Selected Backward Vg (V)": float(r_state["on_row"]["GateV"]),
                 }
 
-            def build_current_log_entry(log_id=None, batch_id=None):
-                if current_project:
-                    settings = ensure_project_device_settings(current_project)
-                    settings["operating_mode"] = operating_mode
-                    settings["width_um"] = float(W)
-                    settings["length_um"] = float(L)
-                    settings["cox_nf_cm2"] = float(Cox_nf)
-                return build_sheet_log_entry(selected_sheet, log_id=log_id, batch_id=batch_id)
-
-
             if st.session_state.pop("save_current_requested", False):
-                records = st.session_state["analysis_log_folders"].get(current_project, [])
-                active_id = st.session_state.get("persistent_active_log_id")
-                batch_id = st.session_state.get("active_batch_id")
-                if batch_id is None and active_id:
-                    rec = next((r for r in records if r.get("_log_id") == active_id), None)
-                    if rec is not None:
-                        batch_id = rec.get("_batch_id", active_id)
-                indices = [i for i,r in enumerate(records) if r.get("_batch_id", r.get("_log_id")) == batch_id]
-                if not indices:
-                    st.warning("저장할 multi-sheet batch를 찾지 못했습니다. Add to Project를 먼저 눌러주세요.")
-                else:
-                    updated = 0; selected_entry = None
-                    for i in indices:
-                        old = records[i]; sheet = old.get("Sheet")
-                        if sheet not in target_sheets: continue
-                        try:
-                            rec = build_sheet_log_entry(sheet, log_id=old["_log_id"], batch_id=batch_id)
-                            records[i] = rec; updated += 1
-                            if sheet == selected_sheet: selected_entry = rec
-                        except Exception as exc:
-                            st.warning(f"{sheet} 저장 실패: {exc}")
-                    if selected_entry is None and indices:
-                        selected_entry = records[indices[0]]
-                    if selected_entry is not None:
-                        st.session_state["persistent_active_log_id"] = selected_entry["_log_id"]
-                        st.session_state["active_batch_id"] = batch_id
-                        st.session_state["active_file_bytes"] = selected_entry["_file_bytes"]
-                        st.session_state["active_file_name"] = selected_entry.get("File", "restored.xlsx")
-                        st.session_state["active_file_source"] = "log"
-                        update_active_project_workspace(active_file_bytes=selected_entry["_file_bytes"], active_file_name=selected_entry.get("File", "restored.xlsx"), active_file_source="log", active_log_id=selected_entry["_log_id"], active_batch_id=batch_id, uploader_generation=int(st.session_state.get("file_uploader_generation",0)), selected_sheet=selected_sheet)
-                    save_projects_state()
-                    st.session_state["save_status_message"] = f"{updated}개 Data Sheet의 수정 사항을 저장했습니다."
+                active_id = st.session_state.get(
+                    "persistent_active_log_id"
+                )
+                target_folder = None
+                target_index = None
 
+                # First try the currently selected project.
+                current_records = st.session_state[
+                    "analysis_log_folders"
+                ].get(current_project, [])
+                for index, record in enumerate(current_records):
+                    if record.get("_log_id") == active_id:
+                        target_folder = current_project
+                        target_index = index
+                        break
+
+                # If the project selector changed or was rebuilt during restore,
+                # locate the active log across all projects.
+                if target_index is None:
+                    for folder_name, records in st.session_state[
+                        "analysis_log_folders"
+                    ].items():
+                        for index, record in enumerate(records):
+                            if record.get("_log_id") == active_id:
+                                target_folder = folder_name
+                                target_index = index
+                                break
+                        if target_index is not None:
+                            break
+
+                if target_folder is not None and target_index is not None:
+                    updated_entry = build_current_log_entry(active_id)
+                    st.session_state["analysis_log_folders"][
+                        target_folder
+                    ][target_index] = updated_entry
+                    st.session_state["active_log_folder"] = target_folder
+                    st.session_state[
+                        "persistent_active_log_id"
+                    ] = active_id
+                    st.session_state[
+                        "active_file_bytes"
+                    ] = updated_entry["_file_bytes"]
+                    st.session_state[
+                        "active_file_name"
+                    ] = updated_entry.get(
+                        "File", "restored.xlsx"
+                    )
+                    st.session_state["active_file_source"] = "log"
+                    update_active_project_workspace(
+                        persist=True,
+                        active_file_bytes=updated_entry["_file_bytes"],
+                        active_file_name=updated_entry.get(
+                            "File", "restored.xlsx"
+                        ),
+                        active_file_source="log",
+                        active_log_id=active_id,
+                        uploader_generation=int(
+                            st.session_state.get(
+                                "file_uploader_generation", 0
+                            )
+                        ),
+                        selected_sheet=selected_sheet,
+                    )
+                    save_projects_state()
+                    st.session_state["save_status_message"] = (
+                        "현재 화면의 방향과 선택값을 그대로 저장했습니다."
+                    )
+                else:
+                    st.warning(
+                        "활성 로그를 찾지 못했습니다. 로그를 다시 연 뒤 "
+                        "Save를 눌러주세요."
+                    )
 
             if st.session_state.get("save_status_message"):
                 st.success(st.session_state.pop("save_status_message"))
 
             if st.session_state.pop("add_project_requested", False):
-                batch_id = str(uuid.uuid4())
-                entries = []; failures = []
-                for sheet in target_sheets:
-                    try:
-                        entries.append(build_sheet_log_entry(sheet, batch_id=batch_id))
-                    except Exception as exc:
-                        failures.append(f"{sheet}: {exc}")
-                if entries:
-                    st.session_state["analysis_log_folders"][current_project].extend(entries)
-                    selected_entry = next((e for e in entries if e.get("Sheet") == selected_sheet), entries[0])
-                    st.session_state["persistent_active_log_id"] = selected_entry["_log_id"]
-                    st.session_state["active_batch_id"] = batch_id
-                    st.session_state["active_file_bytes"] = selected_entry["_file_bytes"]
-                    st.session_state["active_file_name"] = selected_entry.get("File", "restored.xlsx")
-                    st.session_state["active_file_source"] = "log"
-                    st.session_state["file_uploader_generation"] = int(st.session_state.get("file_uploader_generation",0)) + 1
-                    update_active_project_workspace(active_file_bytes=selected_entry["_file_bytes"], active_file_name=selected_entry.get("File", "restored.xlsx"), active_file_source="log", active_log_id=selected_entry["_log_id"], active_batch_id=batch_id, uploader_generation=st.session_state["file_uploader_generation"], selected_sheet=selected_sheet)
-                    save_projects_state()
-                    st.success(f"'{current_project}' 프로젝트에 {len(entries)}개 Data Sheet를 한 번에 추가했습니다.")
-                    if failures: st.warning("일부 시트 실패: " + " | ".join(failures))
-                    st.rerun()
-                else:
-                    st.error("추가 가능한 Data Sheet가 없습니다.")
-
+                log_entry = build_current_log_entry()
+                st.session_state["analysis_log_folders"][current_project].append(
+                    log_entry
+                )
+                st.session_state["active_log_folder"] = current_project
+                st.session_state["persistent_active_log_id"] = log_entry["_log_id"]
+                st.session_state["active_file_bytes"] = log_entry["_file_bytes"]
+                st.session_state["active_file_name"] = log_entry.get(
+                    "File", "restored.xlsx"
+                )
+                st.session_state["active_file_source"] = "log"
+                st.session_state["file_uploader_generation"] = (
+                    int(st.session_state.get("file_uploader_generation", 0)) + 1
+                )
+                update_active_project_workspace(
+                    persist=True,
+                    active_file_bytes=log_entry["_file_bytes"],
+                    active_file_name=log_entry.get(
+                        "File", "restored.xlsx"
+                    ),
+                    active_file_source="log",
+                    active_log_id=log_entry["_log_id"],
+                    uploader_generation=int(
+                        st.session_state["file_uploader_generation"]
+                    ),
+                    selected_sheet=selected_sheet,
+                )
+                save_projects_state()
+                st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
+                st.rerun()
 
             def slider_with_auto(container, state, key_name, default_value, label, prefix):
                 render_discrete_vg_control(
