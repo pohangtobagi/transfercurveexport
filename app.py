@@ -19,8 +19,8 @@ except ImportError:
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
-st.title("FET-Analysis_Minjae X Junseong")
+st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
+st.title("FET-Analysis_Minjae")
 
 st.markdown("""
 <style>
@@ -1599,51 +1599,147 @@ def cached_calc_curves(
     )
 
 def auto_peak_index(mobility):
-    """Detect the most abnormal local change, not the absolute maximum.
+    """Detect a high-mobility point with an abnormally large local change.
 
-    The score favors an isolated point whose value departs strongly from the
-    line connecting its two neighbors. This is robust against a broad,
-    physically meaningful mobility maximum and instead targets narrow spikes.
+    Priority is based on:
+
+        anomaly score × normalized mobility magnitude
+
+    Therefore, among points with strong local changes, a point having the
+    larger mobility value is selected first. A low-mobility noise point is
+    less likely to win even when its relative change is locally large.
     """
     values = np.asarray(mobility, dtype=float)
     n = len(values)
+
     if n == 0:
         return 0
+
+    finite_mask = np.isfinite(values)
+    if not finite_mask.any():
+        return 0
+
     if n < 5:
-        finite = np.where(np.isfinite(values), values, -np.inf)
-        return int(np.argmax(finite))
+        finite_values = np.where(
+            finite_mask,
+            values,
+            -np.inf,
+        )
+        return int(np.argmax(finite_values))
 
     work = values.copy()
     valid = np.isfinite(work)
+
     if valid.sum() < 3:
-        return 0
-    idx = np.arange(n)
-    work[~valid] = np.interp(idx[~valid], idx[valid], work[valid])
+        finite_values = np.where(
+            valid,
+            work,
+            -np.inf,
+        )
+        return int(np.argmax(finite_values))
 
-    # Local departure from the straight line through the neighboring points.
-    expected = 0.5 * (work[:-2] + work[2:])
-    curvature = np.abs(work[1:-1] - expected)
+    point_indices = np.arange(n)
+    work[~valid] = np.interp(
+        point_indices[~valid],
+        point_indices[valid],
+        work[valid],
+    )
 
-    # A genuine one-point spike normally produces large changes on both sides.
-    left_jump = np.abs(work[1:-1] - work[:-2])
-    right_jump = np.abs(work[2:] - work[1:-1])
-    two_sided_jump = np.minimum(left_jump, right_jump)
+    # Difference from the line connecting the two neighboring points.
+    neighbor_average = 0.5 * (
+        work[:-2] + work[2:]
+    )
+    curvature = np.abs(
+        work[1:-1] - neighbor_average
+    )
 
-    # Robust normalization prevents a high-mobility plateau from winning.
-    def robust_scale(arr):
-        arr = np.asarray(arr, dtype=float)
-        med = np.nanmedian(arr)
-        mad = np.nanmedian(np.abs(arr - med))
-        return max(1.4826 * mad, np.finfo(float).eps)
+    # A one-point spike generally changes strongly on both sides.
+    left_change = np.abs(
+        work[1:-1] - work[:-2]
+    )
+    right_change = np.abs(
+        work[2:] - work[1:-1]
+    )
+    two_sided_change = np.minimum(
+        left_change,
+        right_change,
+    )
 
-    score = curvature / robust_scale(curvature)
-    score += two_sided_jump / robust_scale(two_sided_jump)
+    def robust_zscore(array):
+        array = np.asarray(array, dtype=float)
+        median = np.nanmedian(array)
+        mad = np.nanmedian(
+            np.abs(array - median)
+        )
+        scale = max(
+            1.4826 * mad,
+            np.finfo(float).eps,
+        )
+        return np.maximum(
+            (array - median) / scale,
+            0.0,
+        )
 
-    # Exclude edge-adjacent points where numerical differentiation is unstable.
-    score[:1] = -np.inf
-    score[-1:] = -np.inf
-    best = int(np.nanargmax(score)) + 1
-    return best
+    # Local abnormal-change score.
+    change_score = (
+        robust_zscore(curvature)
+        + robust_zscore(two_sided_change)
+    )
+
+    center_values = work[1:-1]
+    finite_center = center_values[
+        np.isfinite(center_values)
+    ]
+
+    if len(finite_center):
+        mobility_min = float(
+            np.nanmin(finite_center)
+        )
+        mobility_max = float(
+            np.nanmax(finite_center)
+        )
+        mobility_span = max(
+            mobility_max - mobility_min,
+            np.finfo(float).eps,
+        )
+
+        # 0.25 is retained as a floor so a genuine abrupt spike is not
+        # completely ignored. The highest mobility point receives 1.25.
+        mobility_weight = (
+            0.25
+            + (
+                center_values - mobility_min
+            ) / mobility_span
+        )
+    else:
+        mobility_weight = np.ones_like(
+            center_values,
+            dtype=float,
+        )
+
+    # User-requested priority:
+    # large local change × large absolute mobility.
+    combined_score = (
+        change_score * mobility_weight
+    )
+
+    # Numerical derivatives are less reliable directly beside the boundaries.
+    combined_score[:1] = -np.inf
+    combined_score[-1:] = -np.inf
+
+    if not np.any(
+        np.isfinite(combined_score)
+    ):
+        finite_values = np.where(
+            np.isfinite(work),
+            work,
+            -np.inf,
+        )
+        return int(np.argmax(finite_values))
+
+    return int(
+        np.nanargmax(combined_score)
+    ) + 1
 
 
 def parameter_values(
@@ -2010,6 +2106,36 @@ def nearest_row_by_vg(active_df, selected_vg):
     return idx, active_df.iloc[idx]
 
 
+def snapped_slider_point(active_df, state_key):
+    """Snap a persistent slider value once and return that exact data point.
+
+    The snapped value is written back to session_state so the slider, plotted
+    arrow and remove callback always refer to the same measured Vg row.
+    """
+    values = sorted_unique_vg(active_df)
+    if len(values) == 0:
+        return None, None
+
+    requested = float(
+        st.session_state.get(state_key, values[0])
+    )
+    nearest_value_idx = int(
+        np.argmin(np.abs(values - requested))
+    )
+    snapped_vg = float(values[nearest_value_idx])
+    st.session_state[state_key] = snapped_vg
+
+    row_idx = int(
+        (
+            pd.to_numeric(
+                active_df["GateV"], errors="coerce"
+            )
+            - snapped_vg
+        ).abs().idxmin()
+    )
+    return row_idx, active_df.iloc[row_idx]
+
+
 
 
 def sorted_unique_vg(active_df):
@@ -2224,7 +2350,12 @@ def render_discrete_vg_control(
         ),
     )
 
-    return float(st.session_state[state_key])
+    snapped_index, snapped_row = snapped_slider_point(
+        active_df, state_key
+    )
+    if snapped_row is None:
+        return np.nan
+    return float(snapped_row["GateV"])
 
 
 
@@ -2627,14 +2758,14 @@ with main_content:
                 float(bwd["GateV"].iloc[res["auto_idx_b"]]),
             )
 
-            selected_f_vg = float(
-                st.session_state[keys["remove_slider_fwd"]]
+            selected_f_idx, selected_f_row = snapped_slider_point(
+                fwd, keys["remove_slider_fwd"]
             )
-            selected_b_vg = float(
-                st.session_state[keys["remove_slider_bwd"]]
+            selected_b_idx, selected_b_row = snapped_slider_point(
+                bwd, keys["remove_slider_bwd"]
             )
-            selected_f_idx, selected_f_row = nearest_row_by_vg(fwd, selected_f_vg)
-            selected_b_idx, selected_b_row = nearest_row_by_vg(bwd, selected_b_vg)
+            selected_f_vg = float(selected_f_row["GateV"])
+            selected_b_vg = float(selected_b_row["GateV"])
             selected_f_mu = float(res["mu_fwd"][selected_f_idx])
             selected_b_mu = float(res["mu_bwd"][selected_b_idx])
 
@@ -3881,24 +4012,26 @@ with main_content:
                 (r_state, keys["log_remove_slider_bwd"]),
             )
             for log_state, log_key in log_target_specs:
-                log_target_vg = float(st.session_state[log_key])
-                log_idx, log_row = nearest_row_by_vg(
-                    log_state["df"], log_target_vg
+                log_idx, log_row = snapped_slider_point(
+                    log_state["df"], log_key
                 )
-                fig.add_trace(
-                    go.Scatter(
-                        x=[float(log_row["GateV"])],
-                        y=[abs(float(log_row["DrainI_active"]))],
-                        mode="markers",
-                        marker=dict(
-                            symbol="x",
-                            size=12,
-                            color=log_state["color"],
-                            line=dict(width=2, color=log_state["color"]),
-                        ),
-                        showlegend=False,
-                    ),
-                    row=1, col=1,
+                log_x = float(log_row["GateV"])
+                log_y = abs(float(log_row["DrainI_active"]))
+                fig.add_annotation(
+                    x=log_x,
+                    y=log_y,
+                    text="",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1.15,
+                    arrowwidth=2.0,
+                    arrowcolor=log_state["color"],
+                    ax=0,
+                    ay=-34,
+                    xref="x",
+                    yref="y",
+                    row=1,
+                    col=1,
                 )
 
             # Mobility curves and independently selected peak lines.
@@ -3934,20 +4067,21 @@ with main_content:
                 (selected_f_row, selected_f_mu, "blue"),
                 (selected_b_row, selected_b_mu, "red"),
             ):
-                fig.add_trace(
-                    go.Scatter(
-                        x=[float(elimination_row["GateV"])],
-                        y=[float(elimination_mu)],
-                        mode="markers",
-                        marker=dict(
-                            symbol="x",
-                            size=12,
-                            color=elimination_color,
-                            line=dict(width=2, color=elimination_color),
-                        ),
-                        showlegend=False,
-                    ),
-                    row=1, col=3,
+                fig.add_annotation(
+                    x=float(elimination_row["GateV"]),
+                    y=float(elimination_mu),
+                    text="",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1.15,
+                    arrowwidth=2.0,
+                    arrowcolor=elimination_color,
+                    ax=0,
+                    ay=-34,
+                    xref="x3",
+                    yref="y3",
+                    row=1,
+                    col=3,
                 )
 
             # SS curves for both directions.
@@ -4196,8 +4330,21 @@ with main_content:
                 else keys["force_auto_peak_bwd"]
             )
 
-            def render_remove_buttons(parent, target_vg, prefix, reset_keys):
-                _, target_row = nearest_row_by_vg(active_state["df"], target_vg)
+            def render_remove_buttons(
+                parent,
+                target_vg,
+                prefix,
+                reset_keys,
+                state_key=None,
+            ):
+                if state_key:
+                    _, target_row = snapped_slider_point(
+                        active_state["df"], state_key
+                    )
+                else:
+                    _, target_row = nearest_row_by_vg(
+                        active_state["df"], target_vg
+                    )
                 remove_col, reset_col = parent.columns(2, gap="small")
                 remove_col.button(
                     "✕",
@@ -4287,6 +4434,7 @@ with main_content:
                     log_remove_vg,
                     f"log_peak_{selected_direction}_{file_id}_{selected_sheet}_{operating_mode}",
                     (),
+                    state_key=active_state["log_remove_key"],
                 )
 
             # Column 2: SS Value slider with range-limited minimum detection.
@@ -4430,6 +4578,7 @@ with main_content:
                             f"{selected_sheet}_{operating_mode}"
                         ),
                         (),
+                        state_key=active_state["remove_key"],
                     )
 
             # Column 4: Transfer Linear has no independent slider.
