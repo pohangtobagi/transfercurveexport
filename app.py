@@ -1599,14 +1599,17 @@ def cached_calc_curves(
     )
 
 def auto_peak_index(mobility):
-    """Detect a high-mobility point with an abnormally large local change.
+    """Select the highest mobility peak that also has a local change maximum.
 
-    Final priority:
-
-        abnormal local-change score × absolute mobility value
-
-    Mobility magnitude is not normalized. Therefore, points having both a
-    strong isolated change and a large absolute mobility are strongly favored.
+    Selection order:
+    1. Find local maxima of absolute mobility.
+    2. Sort those mobility peaks from highest to lowest.
+    3. Starting from the highest peak, accept the first point that is also
+       a local maximum of the abnormal-change score.
+    4. If the highest mobility point does not satisfy the change condition,
+       inspect the next-highest mobility peak.
+    5. If no candidate satisfies both conditions, fall back to the local
+       mobility peak having the largest abnormal-change score.
     """
     values = np.asarray(mobility, dtype=float)
     n = len(values)
@@ -1618,10 +1621,12 @@ def auto_peak_index(mobility):
     if not finite_mask.any():
         return 0
 
+    absolute_values = np.abs(values)
+
     if n < 5:
         finite_values = np.where(
             finite_mask,
-            np.abs(values),
+            absolute_values,
             -np.inf,
         )
         return int(np.argmax(finite_values))
@@ -1643,8 +1648,11 @@ def auto_peak_index(mobility):
         point_indices[valid],
         work[valid],
     )
+    abs_work = np.abs(work)
 
-    # Departure of the center point from the line joining its neighbors.
+    # --------------------------------------------------------
+    # Abnormal local-change score
+    # --------------------------------------------------------
     neighbor_average = 0.5 * (
         work[:-2] + work[2:]
     )
@@ -1652,7 +1660,6 @@ def auto_peak_index(mobility):
         work[1:-1] - neighbor_average
     )
 
-    # A narrow one-point spike normally has large changes on both sides.
     left_change = np.abs(
         work[1:-1] - work[:-2]
     )
@@ -1679,47 +1686,124 @@ def auto_peak_index(mobility):
             0.0,
         )
 
-    abnormal_change_score = (
+    center_change_score = (
         robust_positive_score(curvature)
         + robust_positive_score(two_sided_change)
     )
 
-    # Raw absolute mobility magnitude: no normalization.
-    absolute_mobility = np.abs(work[1:-1])
+    # Map center-point scores back to the full mobility array.
+    change_score = np.full(n, -np.inf, dtype=float)
+    change_score[1:-1] = center_change_score
 
-    combined_score = (
-        abnormal_change_score
-        * absolute_mobility
+    # Edge-adjacent derivative points are unreliable.
+    change_score[:2] = -np.inf
+    change_score[-2:] = -np.inf
+
+    # --------------------------------------------------------
+    # Candidate 1: local maxima of |mobility|
+    # --------------------------------------------------------
+    mobility_peak_mask = np.zeros(n, dtype=bool)
+    mobility_peak_mask[1:-1] = (
+        (abs_work[1:-1] >= abs_work[:-2])
+        & (abs_work[1:-1] >= abs_work[2:])
+        & (
+            (abs_work[1:-1] > abs_work[:-2])
+            | (abs_work[1:-1] > abs_work[2:])
+        )
+    )
+    mobility_peak_mask &= np.isfinite(abs_work)
+
+    mobility_peak_indices = np.where(
+        mobility_peak_mask
+    )[0]
+
+    if len(mobility_peak_indices) == 0:
+        finite_values = np.where(
+            np.isfinite(abs_work),
+            abs_work,
+            -np.inf,
+        )
+        return int(np.argmax(finite_values))
+
+    # Highest mobility maximum is examined first.
+    ranked_mobility_peaks = mobility_peak_indices[
+        np.argsort(
+            abs_work[mobility_peak_indices]
+        )[::-1]
+    ]
+
+    # --------------------------------------------------------
+    # Candidate 2: local maxima of abnormal-change score
+    # --------------------------------------------------------
+    change_peak_mask = np.zeros(n, dtype=bool)
+    finite_change = np.isfinite(change_score)
+
+    for idx in range(2, n - 2):
+        if not finite_change[idx]:
+            continue
+
+        current_score = change_score[idx]
+        left_score = change_score[idx - 1]
+        right_score = change_score[idx + 1]
+
+        if (
+            current_score > 0
+            and current_score >= left_score
+            and current_score >= right_score
+            and (
+                current_score > left_score
+                or current_score > right_score
+            )
+        ):
+            change_peak_mask[idx] = True
+
+    # Traverse mobility maxima from largest to smaller values.
+    # The first one that is also a change maximum is selected.
+    for candidate_idx in ranked_mobility_peaks:
+        if change_peak_mask[candidate_idx]:
+            return int(candidate_idx)
+
+    # No exact intersection: retain the mobility-peak constraint and choose
+    # the one with the greatest abnormal-change score.
+    candidate_scores = change_score[
+        ranked_mobility_peaks
+    ]
+    finite_candidate_scores = np.isfinite(
+        candidate_scores
     )
 
-    # Numerical differentiation is unreliable beside the boundaries.
-    combined_score[:1] = -np.inf
-    combined_score[-1:] = -np.inf
+    if finite_candidate_scores.any():
+        valid_candidates = ranked_mobility_peaks[
+            finite_candidate_scores
+        ]
+        valid_scores = candidate_scores[
+            finite_candidate_scores
+        ]
 
-    if not np.any(np.isfinite(combined_score)):
-        finite_values = np.where(
-            np.isfinite(work),
-            np.abs(work),
-            -np.inf,
+        best_score = np.nanmax(valid_scores)
+        best_candidates = valid_candidates[
+            np.isclose(
+                valid_scores,
+                best_score,
+                rtol=1e-9,
+                atol=1e-12,
+            )
+        ]
+
+        # Tie-breaker: choose the larger |mobility|.
+        return int(
+            best_candidates[
+                np.argmax(abs_work[best_candidates])
+            ]
         )
-        return int(np.argmax(finite_values))
 
-    # If every local-change score is zero, fall back to maximum |mobility|.
-    finite_combined = combined_score[
-        np.isfinite(combined_score)
-    ]
-    if (
-        len(finite_combined) == 0
-        or np.nanmax(finite_combined) <= 0
-    ):
-        finite_values = np.where(
-            np.isfinite(work),
-            np.abs(work),
-            -np.inf,
-        )
-        return int(np.argmax(finite_values))
-
-    return int(np.nanargmax(combined_score)) + 1
+    # Final fallback: absolute mobility maximum.
+    finite_values = np.where(
+        np.isfinite(abs_work),
+        abs_work,
+        -np.inf,
+    )
+    return int(np.argmax(finite_values))
 
 
 def parameter_values(
