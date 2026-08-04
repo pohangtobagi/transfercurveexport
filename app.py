@@ -1599,17 +1599,17 @@ def cached_calc_curves(
     )
 
 def auto_peak_index(mobility):
-    """Select the highest mobility peak that also has a local change maximum.
+    """Select the largest mobility among points with a large |Δμ/Δx|.
 
-    Selection order:
-    1. Find local maxima of absolute mobility.
-    2. Sort those mobility peaks from highest to lowest.
-    3. Starting from the highest peak, accept the first point that is also
-       a local maximum of the abnormal-change score.
-    4. If the highest mobility point does not satisfy the change condition,
-       inspect the next-highest mobility peak.
-    5. If no candidate satisfies both conditions, fall back to the local
-       mobility peak having the largest abnormal-change score.
+    Detection order:
+    1. Calculate the absolute local slope |Δμ/Δx| using the data-point index
+       as x because this function receives only the mobility array.
+    2. Detect local maxima of the absolute slope.
+    3. Keep slope peaks that are abnormally large by a robust threshold.
+    4. Among those large-slope candidates, select the point having the
+       largest absolute mobility.
+    5. If no point passes the robust threshold, use the strongest slope peaks
+       and select the largest absolute mobility among them.
     """
     values = np.asarray(mobility, dtype=float)
     n = len(values)
@@ -1621,12 +1621,12 @@ def auto_peak_index(mobility):
     if not finite_mask.any():
         return 0
 
-    absolute_values = np.abs(values)
+    absolute_mobility = np.abs(values)
 
-    if n < 5:
+    if n < 3:
         finite_values = np.where(
             finite_mask,
-            absolute_values,
+            absolute_mobility,
             -np.inf,
         )
         return int(np.argmax(finite_values))
@@ -1634,7 +1634,7 @@ def auto_peak_index(mobility):
     work = values.copy()
     valid = np.isfinite(work)
 
-    if valid.sum() < 3:
+    if valid.sum() < 2:
         finite_values = np.where(
             valid,
             np.abs(work),
@@ -1642,168 +1642,144 @@ def auto_peak_index(mobility):
         )
         return int(np.argmax(finite_values))
 
-    point_indices = np.arange(n)
+    indices = np.arange(n, dtype=float)
     work[~valid] = np.interp(
-        point_indices[~valid],
-        point_indices[valid],
+        indices[~valid],
+        indices[valid],
         work[valid],
     )
-    abs_work = np.abs(work)
 
-    # --------------------------------------------------------
-    # Abnormal local-change score
-    # --------------------------------------------------------
-    neighbor_average = 0.5 * (
-        work[:-2] + work[2:]
-    )
-    curvature = np.abs(
-        work[1:-1] - neighbor_average
+    # Central-difference estimate of |Δμ/Δx|.
+    slope_abs = np.abs(
+        np.gradient(work, indices)
     )
 
-    left_change = np.abs(
-        work[1:-1] - work[:-2]
-    )
-    right_change = np.abs(
-        work[2:] - work[1:-1]
-    )
-    two_sided_change = np.minimum(
-        left_change,
-        right_change,
-    )
+    # Do not select unreliable boundary points.
+    slope_abs[0] = np.nan
+    slope_abs[-1] = np.nan
 
-    def robust_positive_score(array):
-        array = np.asarray(array, dtype=float)
-        median = np.nanmedian(array)
-        mad = np.nanmedian(
-            np.abs(array - median)
-        )
-        scale = max(
-            1.4826 * mad,
-            np.finfo(float).eps,
-        )
-        return np.maximum(
-            (array - median) / scale,
-            0.0,
-        )
-
-    center_change_score = (
-        robust_positive_score(curvature)
-        + robust_positive_score(two_sided_change)
-    )
-
-    # Map center-point scores back to the full mobility array.
-    change_score = np.full(n, -np.inf, dtype=float)
-    change_score[1:-1] = center_change_score
-
-    # Edge-adjacent derivative points are unreliable.
-    change_score[:2] = -np.inf
-    change_score[-2:] = -np.inf
-
-    # --------------------------------------------------------
-    # Candidate 1: local maxima of |mobility|
-    # --------------------------------------------------------
-    mobility_peak_mask = np.zeros(n, dtype=bool)
-    mobility_peak_mask[1:-1] = (
-        (abs_work[1:-1] >= abs_work[:-2])
-        & (abs_work[1:-1] >= abs_work[2:])
-        & (
-            (abs_work[1:-1] > abs_work[:-2])
-            | (abs_work[1:-1] > abs_work[2:])
-        )
-    )
-    mobility_peak_mask &= np.isfinite(abs_work)
-
-    mobility_peak_indices = np.where(
-        mobility_peak_mask
-    )[0]
-
-    if len(mobility_peak_indices) == 0:
-        finite_values = np.where(
-            np.isfinite(abs_work),
-            abs_work,
-            -np.inf,
-        )
-        return int(np.argmax(finite_values))
-
-    # Highest mobility maximum is examined first.
-    ranked_mobility_peaks = mobility_peak_indices[
-        np.argsort(
-            abs_work[mobility_peak_indices]
-        )[::-1]
-    ]
-
-    # --------------------------------------------------------
-    # Candidate 2: local maxima of abnormal-change score
-    # --------------------------------------------------------
-    change_peak_mask = np.zeros(n, dtype=bool)
-    finite_change = np.isfinite(change_score)
-
-    for idx in range(2, n - 2):
-        if not finite_change[idx]:
+    # Local maxima of the absolute slope.
+    slope_peak_mask = np.zeros(n, dtype=bool)
+    for idx in range(1, n - 1):
+        current = slope_abs[idx]
+        if not np.isfinite(current):
             continue
 
-        current_score = change_score[idx]
-        left_score = change_score[idx - 1]
-        right_score = change_score[idx + 1]
+        left = slope_abs[idx - 1]
+        right = slope_abs[idx + 1]
 
-        if (
-            current_score > 0
-            and current_score >= left_score
-            and current_score >= right_score
-            and (
-                current_score > left_score
-                or current_score > right_score
+        left_ok = (
+            not np.isfinite(left)
+            or current >= left
+        )
+        right_ok = (
+            not np.isfinite(right)
+            or current >= right
+        )
+        strictly_larger = (
+            (np.isfinite(left) and current > left)
+            or (np.isfinite(right) and current > right)
+        )
+
+        if left_ok and right_ok and strictly_larger:
+            slope_peak_mask[idx] = True
+
+    slope_peak_indices = np.where(
+        slope_peak_mask
+    )[0]
+
+    if len(slope_peak_indices) == 0:
+        finite_slope_indices = np.where(
+            np.isfinite(slope_abs)
+        )[0]
+        if len(finite_slope_indices) == 0:
+            finite_values = np.where(
+                np.isfinite(work),
+                np.abs(work),
+                -np.inf,
             )
-        ):
-            change_peak_mask[idx] = True
+            return int(np.argmax(finite_values))
 
-    # Traverse mobility maxima from largest to smaller values.
-    # The first one that is also a change maximum is selected.
-    for candidate_idx in ranked_mobility_peaks:
-        if change_peak_mask[candidate_idx]:
-            return int(candidate_idx)
-
-    # No exact intersection: retain the mobility-peak constraint and choose
-    # the one with the greatest abnormal-change score.
-    candidate_scores = change_score[
-        ranked_mobility_peaks
-    ]
-    finite_candidate_scores = np.isfinite(
-        candidate_scores
-    )
-
-    if finite_candidate_scores.any():
-        valid_candidates = ranked_mobility_peaks[
-            finite_candidate_scores
-        ]
-        valid_scores = candidate_scores[
-            finite_candidate_scores
-        ]
-
-        best_score = np.nanmax(valid_scores)
-        best_candidates = valid_candidates[
+        maximum_slope = np.nanmax(
+            slope_abs[finite_slope_indices]
+        )
+        slope_peak_indices = finite_slope_indices[
             np.isclose(
-                valid_scores,
-                best_score,
+                slope_abs[finite_slope_indices],
+                maximum_slope,
                 rtol=1e-9,
                 atol=1e-12,
             )
         ]
 
-        # Tie-breaker: choose the larger |mobility|.
-        return int(
-            best_candidates[
-                np.argmax(abs_work[best_candidates])
-            ]
-        )
-
-    # Final fallback: absolute mobility maximum.
-    finite_values = np.where(
-        np.isfinite(abs_work),
-        abs_work,
-        -np.inf,
+    # Robust threshold for "large" |Δμ/Δx|.
+    finite_slopes = slope_abs[
+        np.isfinite(slope_abs)
+    ]
+    slope_median = float(
+        np.nanmedian(finite_slopes)
     )
-    return int(np.argmax(finite_values))
+    slope_mad = float(
+        np.nanmedian(
+            np.abs(finite_slopes - slope_median)
+        )
+    )
+    robust_scale = max(
+        1.4826 * slope_mad,
+        np.finfo(float).eps,
+    )
+    large_slope_threshold = (
+        slope_median + 2.5 * robust_scale
+    )
+
+    large_slope_candidates = slope_peak_indices[
+        slope_abs[slope_peak_indices]
+        >= large_slope_threshold
+    ]
+
+    if len(large_slope_candidates) == 0:
+        # No robust outlier: keep the strongest 25% of slope maxima.
+        peak_slopes = slope_abs[
+            slope_peak_indices
+        ]
+        cutoff = float(
+            np.nanquantile(peak_slopes, 0.75)
+        )
+        large_slope_candidates = slope_peak_indices[
+            peak_slopes >= cutoff
+        ]
+
+    if len(large_slope_candidates) == 0:
+        large_slope_candidates = slope_peak_indices
+
+    # User-requested final decision:
+    # among large |Δμ/Δx| points, choose maximum |mobility|.
+    candidate_mobility = np.abs(
+        work[large_slope_candidates]
+    )
+    maximum_mobility = np.nanmax(
+        candidate_mobility
+    )
+    best_candidates = large_slope_candidates[
+        np.isclose(
+            candidate_mobility,
+            maximum_mobility,
+            rtol=1e-9,
+            atol=1e-12,
+        )
+    ]
+
+    if len(best_candidates) == 1:
+        return int(best_candidates[0])
+
+    # Tie-breaker: choose the candidate with larger |Δμ/Δx|.
+    return int(
+        best_candidates[
+            np.nanargmax(
+                slope_abs[best_candidates]
+            )
+        ]
+    )
 
 
 def parameter_values(
