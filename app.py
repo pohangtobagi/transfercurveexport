@@ -1601,13 +1601,12 @@ def cached_calc_curves(
 def auto_peak_index(mobility):
     """Detect a high-mobility point with an abnormally large local change.
 
-    Priority is based on:
+    Final priority:
 
-        anomaly score × normalized mobility magnitude
+        abnormal local-change score × absolute mobility value
 
-    Therefore, among points with strong local changes, a point having the
-    larger mobility value is selected first. A low-mobility noise point is
-    less likely to win even when its relative change is locally large.
+    Mobility magnitude is not normalized. Therefore, points having both a
+    strong isolated change and a large absolute mobility are strongly favored.
     """
     values = np.asarray(mobility, dtype=float)
     n = len(values)
@@ -1622,7 +1621,7 @@ def auto_peak_index(mobility):
     if n < 5:
         finite_values = np.where(
             finite_mask,
-            values,
+            np.abs(values),
             -np.inf,
         )
         return int(np.argmax(finite_values))
@@ -1633,7 +1632,7 @@ def auto_peak_index(mobility):
     if valid.sum() < 3:
         finite_values = np.where(
             valid,
-            work,
+            np.abs(work),
             -np.inf,
         )
         return int(np.argmax(finite_values))
@@ -1645,7 +1644,7 @@ def auto_peak_index(mobility):
         work[valid],
     )
 
-    # Difference from the line connecting the two neighboring points.
+    # Departure of the center point from the line joining its neighbors.
     neighbor_average = 0.5 * (
         work[:-2] + work[2:]
     )
@@ -1653,7 +1652,7 @@ def auto_peak_index(mobility):
         work[1:-1] - neighbor_average
     )
 
-    # A one-point spike generally changes strongly on both sides.
+    # A narrow one-point spike normally has large changes on both sides.
     left_change = np.abs(
         work[1:-1] - work[:-2]
     )
@@ -1665,7 +1664,7 @@ def auto_peak_index(mobility):
         right_change,
     )
 
-    def robust_zscore(array):
+    def robust_positive_score(array):
         array = np.asarray(array, dtype=float)
         median = np.nanmedian(array)
         mad = np.nanmedian(
@@ -1680,66 +1679,47 @@ def auto_peak_index(mobility):
             0.0,
         )
 
-    # Local abnormal-change score.
-    change_score = (
-        robust_zscore(curvature)
-        + robust_zscore(two_sided_change)
+    abnormal_change_score = (
+        robust_positive_score(curvature)
+        + robust_positive_score(two_sided_change)
     )
 
-    center_values = work[1:-1]
-    finite_center = center_values[
-        np.isfinite(center_values)
-    ]
+    # Raw absolute mobility magnitude: no normalization.
+    absolute_mobility = np.abs(work[1:-1])
 
-    if len(finite_center):
-        mobility_min = float(
-            np.nanmin(finite_center)
-        )
-        mobility_max = float(
-            np.nanmax(finite_center)
-        )
-        mobility_span = max(
-            mobility_max - mobility_min,
-            np.finfo(float).eps,
-        )
-
-        # 0.25 is retained as a floor so a genuine abrupt spike is not
-        # completely ignored. The highest mobility point receives 1.25.
-        mobility_weight = (
-            0.25
-            + (
-                center_values - mobility_min
-            ) / mobility_span
-        )
-    else:
-        mobility_weight = np.ones_like(
-            center_values,
-            dtype=float,
-        )
-
-    # User-requested priority:
-    # large local change × large absolute mobility.
     combined_score = (
-        change_score * mobility_weight
+        abnormal_change_score
+        * absolute_mobility
     )
 
-    # Numerical derivatives are less reliable directly beside the boundaries.
+    # Numerical differentiation is unreliable beside the boundaries.
     combined_score[:1] = -np.inf
     combined_score[-1:] = -np.inf
 
-    if not np.any(
-        np.isfinite(combined_score)
-    ):
+    if not np.any(np.isfinite(combined_score)):
         finite_values = np.where(
             np.isfinite(work),
-            work,
+            np.abs(work),
             -np.inf,
         )
         return int(np.argmax(finite_values))
 
-    return int(
-        np.nanargmax(combined_score)
-    ) + 1
+    # If every local-change score is zero, fall back to maximum |mobility|.
+    finite_combined = combined_score[
+        np.isfinite(combined_score)
+    ]
+    if (
+        len(finite_combined) == 0
+        or np.nanmax(finite_combined) <= 0
+    ):
+        finite_values = np.where(
+            np.isfinite(work),
+            np.abs(work),
+            -np.inf,
+        )
+        return int(np.argmax(finite_values))
+
+    return int(np.nanargmax(combined_score)) + 1
 
 
 def parameter_values(
@@ -4017,19 +3997,27 @@ with main_content:
                 )
                 log_x = float(log_row["GateV"])
                 log_y = abs(float(log_row["DrainI_active"]))
-                fig.add_annotation(
-                    x=log_x,
-                    y=log_y,
-                    text="",
-                    showarrow=True,
-                    arrowhead=2,
-                    arrowsize=1.15,
-                    arrowwidth=2.0,
-                    arrowcolor=log_state["color"],
-                    ax=0,
-                    ay=-34,
-                    xref="x",
-                    yref="y",
+                fig.add_trace(
+                    go.Scatter(
+                        x=[log_x],
+                        y=[log_y],
+                        mode="markers",
+                        marker=dict(
+                            symbol="x",
+                            size=12,
+                            color=log_state["color"],
+                            line=dict(
+                                width=2,
+                                color=log_state["color"],
+                            ),
+                        ),
+                        showlegend=False,
+                        hovertemplate=(
+                            "Vg=%{x:.3f} V"
+                            "<br>|Id|=%{y:.3e} A"
+                            "<extra></extra>"
+                        ),
+                    ),
                     row=1,
                     col=1,
                 )
@@ -4067,19 +4055,27 @@ with main_content:
                 (selected_f_row, selected_f_mu, "blue"),
                 (selected_b_row, selected_b_mu, "red"),
             ):
-                fig.add_annotation(
-                    x=float(elimination_row["GateV"]),
-                    y=float(elimination_mu),
-                    text="",
-                    showarrow=True,
-                    arrowhead=2,
-                    arrowsize=1.15,
-                    arrowwidth=2.0,
-                    arrowcolor=elimination_color,
-                    ax=0,
-                    ay=-34,
-                    xref="x3",
-                    yref="y3",
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(elimination_row["GateV"])],
+                        y=[float(elimination_mu)],
+                        mode="markers",
+                        marker=dict(
+                            symbol="x",
+                            size=12,
+                            color=elimination_color,
+                            line=dict(
+                                width=2,
+                                color=elimination_color,
+                            ),
+                        ),
+                        showlegend=False,
+                        hovertemplate=(
+                            "Vg=%{x:.3f} V"
+                            "<br>Mobility=%{y:.3e}"
+                            "<extra></extra>"
+                        ),
+                    ),
                     row=1,
                     col=3,
                 )
