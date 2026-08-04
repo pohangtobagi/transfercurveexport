@@ -19,8 +19,8 @@ except ImportError:
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="FET-Analysis_Minjae", layout="wide")
-st.title("FET-Analysis_Minjae")
+st.set_page_config(page_title="FET-Analysis_Minjae X Junseong", layout="wide")
+st.title("FET-Analysis_Minjae X Junseong")
 
 st.markdown("""
 <style>
@@ -909,6 +909,7 @@ def sci_plain(value, digits=2):
 
 EXPORT_COLUMNS = [
     "File",
+    "Sheet",
     "Drain voltage",
     "Linear or saturation",
     "Gate voltage range",
@@ -929,34 +930,101 @@ def log_dataframe(folder_name):
         return pd.DataFrame(columns=EXPORT_COLUMNS)
 
     rows = []
-    for record in records:
-        rows.append({
-            "File": record.get("File", ""),
-            "Drain voltage": record.get("Drain voltage (V)", np.nan),
-            "Linear or saturation": record.get("Operating mode", ""),
-            "Gate voltage range": record.get("Gate voltage range", ""),
-            "Gate voltage step": record.get("Gate voltage step (V)", np.nan),
-            "On current (A/um)": sci_plain(
-                record.get("ON current / Width (A/μm)", np.nan)
-            ),
-            "Off current (A/um)": sci_plain(
-                record.get("OFF current / Width (A/μm)", np.nan)
-            ),
-            "on-off ratio": sci_plain(
-                record.get("ON/OFF ratio", np.nan)
-            ),
-            "Field-effect mobility": record.get(
-                "Forward mobility (cm²/V·s)", np.nan
-            ),
-            "threshold voltage (V)": record.get(
-                "Forward Vth (V)", np.nan
-            ),
-            "subthreshold swing (mV/dec)": record.get(
-                "Forward SS (mV/dec)", np.nan
-            ),
-        })
+    for record_order, record in enumerate(records):
+        all_sheet_parameters = record.get("_all_sheet_parameters")
 
-    return pd.DataFrame(rows, columns=EXPORT_COLUMNS)
+        if isinstance(all_sheet_parameters, list) and all_sheet_parameters:
+            source_rows = all_sheet_parameters
+        else:
+            # Backward compatibility for older single-sheet logs.
+            source_rows = [{
+                "Sheet": record.get("Sheet", ""),
+                "Drain voltage (V)": record.get(
+                    "Drain voltage (V)", np.nan
+                ),
+                "Operating mode": record.get(
+                    "Operating mode", ""
+                ),
+                "Gate voltage range": record.get(
+                    "Gate voltage range", ""
+                ),
+                "Gate voltage step (V)": record.get(
+                    "Gate voltage step (V)", np.nan
+                ),
+                "ON current / Width (A/μm)": record.get(
+                    "ON current / Width (A/μm)", np.nan
+                ),
+                "OFF current / Width (A/μm)": record.get(
+                    "OFF current / Width (A/μm)", np.nan
+                ),
+                "ON/OFF ratio": record.get(
+                    "ON/OFF ratio", np.nan
+                ),
+                "Forward mobility (cm²/V·s)": record.get(
+                    "Forward mobility (cm²/V·s)", np.nan
+                ),
+                "Forward Vth (V)": record.get(
+                    "Forward Vth (V)", np.nan
+                ),
+                "Forward SS (mV/dec)": record.get(
+                    "Forward SS (mV/dec)", np.nan
+                ),
+                "_sheet_order": 0,
+            }]
+
+        for sheet_row in source_rows:
+            rows.append({
+                "File": record.get("File", ""),
+                "Sheet": sheet_row.get("Sheet", ""),
+                "Drain voltage": sheet_row.get(
+                    "Drain voltage (V)", np.nan
+                ),
+                "Linear or saturation": sheet_row.get(
+                    "Operating mode", record.get("Operating mode", "")
+                ),
+                "Gate voltage range": sheet_row.get(
+                    "Gate voltage range", ""
+                ),
+                "Gate voltage step": sheet_row.get(
+                    "Gate voltage step (V)", np.nan
+                ),
+                "On current (A/um)": sci_plain(
+                    sheet_row.get(
+                        "ON current / Width (A/μm)", np.nan
+                    )
+                ),
+                "Off current (A/um)": sci_plain(
+                    sheet_row.get(
+                        "OFF current / Width (A/μm)", np.nan
+                    )
+                ),
+                "on-off ratio": sci_plain(
+                    sheet_row.get("ON/OFF ratio", np.nan)
+                ),
+                "Field-effect mobility": sheet_row.get(
+                    "Forward mobility (cm²/V·s)", np.nan
+                ),
+                "threshold voltage (V)": sheet_row.get(
+                    "Forward Vth (V)", np.nan
+                ),
+                "subthreshold swing (mV/dec)": sheet_row.get(
+                    "Forward SS (mV/dec)", np.nan
+                ),
+                "_record_order": record_order,
+                "_sheet_order": int(
+                    sheet_row.get("_sheet_order", 0)
+                ),
+            })
+
+    output = pd.DataFrame(rows)
+    if output.empty:
+        return pd.DataFrame(columns=EXPORT_COLUMNS)
+
+    output = output.sort_values(
+        ["_record_order", "_sheet_order"],
+        kind="stable",
+    ).drop(columns=["_record_order", "_sheet_order"])
+    return output.reindex(columns=EXPORT_COLUMNS).reset_index(drop=True)
 
 
 def autosize_worksheet(ws):
@@ -1306,7 +1374,14 @@ if project_names:
                 if len(raw_file_name) <= 24
                 else raw_file_name[:21] + "…"
             )
+            sheet_count = len(
+                log_record.get("_all_sheet_parameters", [])
+            )
             log_label = f"📄 {compact_file_name}"
+            if sheet_count:
+                log_label += f" · {sheet_count} sheets"
+            elif log_record.get("Sheet"):
+                log_label += f" · {log_record.get('Sheet')}"
             if saved_time:
                 log_label += f"  {saved_time}"
 
@@ -2974,6 +3049,373 @@ with main_content:
                     elimination_default_vg,
                 )
 
+            def collect_all_sheet_parameters():
+                """Calculate every data sheet in original workbook order.
+
+                Visited sheets use their current slider/removal state. Sheets
+                that were not opened use the same automatic defaults as the UI.
+                Calc and Settings are excluded through target_sheets.
+                """
+                results = []
+
+                for sheet_order, sheet_name in enumerate(target_sheets):
+                    try:
+                        sheet_df = standardize_measurement_columns(
+                            cached_read_excel_sheet(
+                                active_excel_bytes,
+                                sheet_name,
+                            ).copy()
+                        )
+                        if not {"GateV", "DrainI"}.issubset(
+                            sheet_df.columns
+                        ):
+                            continue
+
+                        if "DrainV" not in sheet_df.columns:
+                            sheet_vd = cached_settings_drain_v(
+                                active_excel_bytes,
+                                sheet_name,
+                            )
+                            if sheet_vd is None:
+                                continue
+                            sheet_df["DrainV"] = float(sheet_vd)
+
+                        sheet_res = analyze_sheet(
+                            sheet_df,
+                            file_id,
+                            sheet_name,
+                        )
+                        sheet_keys = sheet_res["keys"]
+
+                        def one_direction(
+                            direction_name,
+                            short_name,
+                            sweep_df,
+                            mu_curve,
+                            gm_curve,
+                            auto_idx,
+                            mobility_max_idx,
+                        ):
+                            is_forward = (
+                                direction_name == "Forward"
+                            )
+                            peak_key = (
+                                sheet_keys["peak_slider_fwd"]
+                                if is_forward
+                                else sheet_keys["peak_slider_bwd"]
+                            )
+                            ss_key = (
+                                sheet_keys["ss_slider_fwd"]
+                                if is_forward
+                                else sheet_keys["ss_slider_bwd"]
+                            )
+                            ss_start_key = (
+                                sheet_keys["ss_range_start_fwd"]
+                                if is_forward
+                                else sheet_keys["ss_range_start_bwd"]
+                            )
+                            ss_end_key = (
+                                sheet_keys["ss_range_end_fwd"]
+                                if is_forward
+                                else sheet_keys["ss_range_end_bwd"]
+                            )
+
+                            peak_default = float(
+                                sweep_df["GateV"].iloc[
+                                    mobility_max_idx
+                                ]
+                            )
+                            initialize_slider_in_range(
+                                peak_key,
+                                sweep_df,
+                                peak_default,
+                            )
+                            peak_idx = int(
+                                (
+                                    sweep_df["GateV"]
+                                    - float(
+                                        st.session_state[peak_key]
+                                    )
+                                ).abs().idxmin()
+                            )
+                            peak_vg = float(
+                                sweep_df["GateV"].iloc[peak_idx]
+                            )
+                            st.session_state[peak_key] = peak_vg
+
+                            current_abs = np.abs(
+                                pd.to_numeric(
+                                    sweep_df["DrainI_active"],
+                                    errors="coerce",
+                                ).to_numpy(dtype=float)
+                            )
+                            on_auto_idx = int(
+                                np.nanargmax(current_abs)
+                            )
+                            positive = (
+                                np.isfinite(current_abs)
+                                & (current_abs > 0)
+                            )
+                            if positive.any():
+                                positive_idx = np.where(positive)[0]
+                                off_auto_idx = int(
+                                    positive_idx[
+                                        np.argmin(
+                                            current_abs[positive]
+                                        )
+                                    ]
+                                )
+                            else:
+                                off_auto_idx = on_auto_idx
+
+                            on_key = (
+                                f"on_slider_{short_name}_{file_id}_"
+                                f"{sheet_name}_{operating_mode}"
+                            )
+                            off_key = (
+                                f"off_slider_{short_name}_{file_id}_"
+                                f"{sheet_name}_{operating_mode}"
+                            )
+                            initialize_slider_in_range(
+                                on_key,
+                                sweep_df,
+                                float(
+                                    sweep_df["GateV"].iloc[
+                                        on_auto_idx
+                                    ]
+                                ),
+                            )
+                            initialize_slider_in_range(
+                                off_key,
+                                sweep_df,
+                                float(
+                                    sweep_df["GateV"].iloc[
+                                        off_auto_idx
+                                    ]
+                                ),
+                            )
+                            _, on_row, on_density = (
+                                current_density_at_vg(
+                                    sweep_df,
+                                    st.session_state[on_key],
+                                    W,
+                                )
+                            )
+                            _, off_row, off_density = (
+                                current_density_at_vg(
+                                    sweep_df,
+                                    st.session_state[off_key],
+                                    W,
+                                )
+                            )
+                            on_current = abs(
+                                float(on_row["DrainI_active"])
+                            )
+                            off_current = abs(
+                                float(off_row["DrainI_active"])
+                            )
+                            onoff = (
+                                on_current / off_current
+                                if np.isfinite(off_current)
+                                and off_current > 0
+                                else np.nan
+                            )
+
+                            ss_values = ss_curve(
+                                sweep_df["DrainI_active"],
+                                sweep_df["GateV"],
+                            )
+                            vg_values = pd.to_numeric(
+                                sweep_df["GateV"],
+                                errors="coerce",
+                            ).to_numpy(dtype=float)
+                            vg_min = float(np.nanmin(vg_values))
+                            vg_max = float(np.nanmax(vg_values))
+                            st.session_state.setdefault(
+                                ss_start_key,
+                                vg_min,
+                            )
+                            st.session_state.setdefault(
+                                ss_end_key,
+                                vg_max,
+                            )
+                            ss_start = float(
+                                st.session_state[ss_start_key]
+                            )
+                            ss_end = float(
+                                st.session_state[ss_end_key]
+                            )
+                            low = max(
+                                vg_min,
+                                min(ss_start, ss_end),
+                            )
+                            high = min(
+                                vg_max,
+                                max(ss_start, ss_end),
+                            )
+                            valid_ss = (
+                                np.isfinite(ss_values)
+                                & (vg_values >= low)
+                                & (vg_values <= high)
+                            )
+                            if valid_ss.any():
+                                candidates = np.where(valid_ss)[0]
+                                ss_auto_idx = int(
+                                    candidates[
+                                        np.argmin(
+                                            ss_values[candidates]
+                                        )
+                                    ]
+                                )
+                            else:
+                                finite_ss = np.where(
+                                    np.isfinite(ss_values)
+                                )[0]
+                                ss_auto_idx = (
+                                    int(finite_ss[0])
+                                    if len(finite_ss)
+                                    else auto_idx
+                                )
+                            ss_default = float(
+                                sweep_df["GateV"].iloc[
+                                    ss_auto_idx
+                                ]
+                            )
+                            initialize_slider_in_range(
+                                ss_key,
+                                sweep_df,
+                                ss_default,
+                            )
+                            ss_idx = int(
+                                (
+                                    sweep_df["GateV"]
+                                    - float(
+                                        st.session_state[ss_key]
+                                    )
+                                ).abs().idxmin()
+                            )
+                            ss_value = (
+                                float(ss_values[ss_idx])
+                                if np.isfinite(ss_values[ss_idx])
+                                else np.nan
+                            )
+
+                            vth_value = vth_at_index(
+                                sweep_df["GateV"],
+                                sweep_df["DrainI_active"],
+                                gm_curve,
+                                peak_idx,
+                                operating_mode,
+                            )
+
+                            return {
+                                "mobility": float(
+                                    mu_curve[peak_idx]
+                                ),
+                                "vth": float(vth_value),
+                                "ss": float(ss_value),
+                                "on_density": float(on_density),
+                                "off_density": float(off_density),
+                                "onoff": float(onoff),
+                            }
+
+                        f_values = one_direction(
+                            "Forward",
+                            "fwd",
+                            sheet_res["fwd"],
+                            sheet_res["mu_fwd"],
+                            sheet_res["gm_fwd"],
+                            sheet_res["auto_idx_f"],
+                            sheet_res["mobility_max_idx_f"],
+                        )
+                        r_values = one_direction(
+                            "Reverse",
+                            "rev",
+                            sheet_res["bwd"],
+                            sheet_res["mu_bwd"],
+                            sheet_res["gm_bwd"],
+                            sheet_res["auto_idx_b"],
+                            sheet_res["mobility_max_idx_b"],
+                        )
+
+                        fwd_df = sheet_res["fwd"]
+                        bwd_df = sheet_res["bwd"]
+                        results.append({
+                            "Sheet": sheet_name,
+                            "_sheet_order": sheet_order,
+                            "Operating mode": operating_mode,
+                            "Drain voltage (V)": float(
+                                sheet_res["vd"]
+                            ),
+                            "Gate voltage range": (
+                                f"{float(min(fwd_df['GateV'].min(), bwd_df['GateV'].min())):.2f} "
+                                f"to {float(max(fwd_df['GateV'].max(), bwd_df['GateV'].max())):.2f} V"
+                            ),
+                            "Gate voltage step (V)": (
+                                float(
+                                    np.median(
+                                        np.abs(
+                                            np.diff(
+                                                fwd_df["GateV"]
+                                            )
+                                        )
+                                    )
+                                )
+                                if len(fwd_df) > 1
+                                else np.nan
+                            ),
+                            "Forward mobility (cm²/V·s)": (
+                                f_values["mobility"]
+                            ),
+                            "Forward Vth (V)": f_values["vth"],
+                            "Forward SS (mV/dec)": f_values["ss"],
+                            "Forward ON/OFF ratio": (
+                                f_values["onoff"]
+                            ),
+                            "Forward ON current / Width (A/μm)": (
+                                f_values["on_density"]
+                            ),
+                            "Forward OFF current / Width (A/μm)": (
+                                f_values["off_density"]
+                            ),
+                            "Backward mobility (cm²/V·s)": (
+                                r_values["mobility"]
+                            ),
+                            "Backward Vth (V)": r_values["vth"],
+                            "Backward SS (mV/dec)": r_values["ss"],
+                            "Backward ON/OFF ratio": (
+                                r_values["onoff"]
+                            ),
+                            "Backward ON current / Width (A/μm)": (
+                                r_values["on_density"]
+                            ),
+                            "Backward OFF current / Width (A/μm)": (
+                                r_values["off_density"]
+                            ),
+                            "Hysteresis (V)": (
+                                abs(
+                                    f_values["vth"]
+                                    - r_values["vth"]
+                                )
+                                if np.isfinite(f_values["vth"])
+                                and np.isfinite(r_values["vth"])
+                                else np.nan
+                            ),
+                            "ON/OFF ratio": f_values["onoff"],
+                            "ON current / Width (A/μm)": (
+                                f_values["on_density"]
+                            ),
+                            "OFF current / Width (A/μm)": (
+                                f_values["off_density"]
+                            ),
+                        })
+                    except Exception:
+                        # Invalid/non-measurement sheets are skipped.
+                        continue
+
+                return results
+
+
             def build_current_log_entry(log_id=None):
                 if current_project:
                     current_settings = ensure_project_device_settings(
@@ -3045,6 +3487,7 @@ with main_content:
                     ),
                     "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "File": active_analysis_file_name,
+                    "_all_sheet_parameters": collect_all_sheet_parameters(),
                     "Sheet": selected_sheet,
                     "Operating mode": operating_mode,
                     "Width (μm)": float(W),
@@ -3145,8 +3588,12 @@ with main_content:
                         selected_sheet=selected_sheet,
                     )
                     save_projects_state()
+                    sheet_count = len(
+                        updated_entry.get("_all_sheet_parameters", [])
+                    )
                     st.session_state["save_status_message"] = (
-                        "현재 화면의 방향과 선택값을 그대로 저장했습니다."
+                        f"파일 전체 {sheet_count}개 시트의 값을 "
+                        "한 번에 저장했습니다."
                     )
                 else:
                     st.warning(
@@ -3186,7 +3633,13 @@ with main_content:
                     selected_sheet=selected_sheet,
                 )
                 save_projects_state()
-                st.success(f"'{current_project}' 프로젝트에 추가했습니다.")
+                sheet_count = len(
+                    log_entry.get("_all_sheet_parameters", [])
+                )
+                st.success(
+                    f"'{current_project}' 프로젝트에 파일 1개와 "
+                    f"{sheet_count}개 시트 결과를 한 번에 추가했습니다."
+                )
                 st.rerun()
 
             def slider_with_auto(container, state, key_name, default_value, label, prefix):
@@ -3985,4 +4438,3 @@ with main_content:
                     "<div class='control-placeholder'></div>",
                     unsafe_allow_html=True,
                 )
-
