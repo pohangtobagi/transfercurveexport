@@ -992,23 +992,18 @@ def log_dataframe(folder_name):
                 "Gate voltage step": sheet_row.get(
                     "Gate voltage step (V)", np.nan
                 ),
-                # Keep these as true Excel numeric values. Their worksheet
-                # display format is set separately to scientific notation.
-                "On current (A/um)": pd.to_numeric(
+                "On current (A/um)": sci_plain(
                     sheet_row.get(
                         "ON current / Width (A/μm)", np.nan
-                    ),
-                    errors="coerce",
+                    )
                 ),
-                "Off current (A/um)": pd.to_numeric(
+                "Off current (A/um)": sci_plain(
                     sheet_row.get(
                         "OFF current / Width (A/μm)", np.nan
-                    ),
-                    errors="coerce",
+                    )
                 ),
-                "on-off ratio": pd.to_numeric(
-                    sheet_row.get("ON/OFF ratio", np.nan),
-                    errors="coerce",
+                "on-off ratio": sci_plain(
+                    sheet_row.get("ON/OFF ratio", np.nan)
                 ),
                 "Field-effect mobility": sheet_row.get(
                     "Forward mobility (cm²/V·s)", np.nan
@@ -1067,24 +1062,6 @@ def style_parameter_sheet(ws):
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-
-    header_to_column = {
-        str(cell.value): cell.column
-        for cell in ws[1]
-    }
-    for header in (
-        "On current (A/um)",
-        "Off current (A/um)",
-        "on-off ratio",
-    ):
-        column_index = header_to_column.get(header)
-        if column_index is None:
-            continue
-        for row_index in range(2, ws.max_row + 1):
-            cell = ws.cell(row=row_index, column=column_index)
-            if isinstance(cell.value, (int, float)):
-                cell.number_format = "0.00E+00"
-
     autosize_worksheet(ws)
 
 
@@ -1127,11 +1104,6 @@ def restore_log_state(record, folder_name=None):
     st.session_state["restored_selected_direction"] = record.get(
         "_selected_direction", "Forward"
     )
-    # New logs save every worksheet's UI/analysis state independently.
-    st.session_state["restored_sheet_states"] = dict(
-        record.get("_sheet_states", {})
-    )
-    st.session_state["restored_state_log_id"] = record.get("_log_id")
     st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
     st.session_state["active_file_bytes"] = file_bytes
     st.session_state["active_file_source"] = "log"
@@ -2617,99 +2589,7 @@ with main_content:
             pre_keys = state_keys(file_id, selected_sheet, operating_mode)
             initialize_removal_state(pre_keys)
 
-            restored_sheet_states = st.session_state.get(
-                "restored_sheet_states", {}
-            )
-            restored_state_log_id = st.session_state.get(
-                "restored_state_log_id",
-                st.session_state.get("restored_log_id", "legacy"),
-            )
-            restore_token = (
-                f"sheet_state_applied_{restored_state_log_id}_"
-                f"{file_id}_{selected_sheet}_{operating_mode}"
-            )
-
-            saved_sheet_state = (
-                restored_sheet_states.get(selected_sheet)
-                if isinstance(restored_sheet_states, dict)
-                else None
-            )
-
-            if (
-                isinstance(saved_sheet_state, dict)
-                and not st.session_state.get(restore_token, False)
-            ):
-                st.session_state[pre_keys["removed_fwd"]] = list(
-                    saved_sheet_state.get("removed_fwd", [])
-                )
-                st.session_state[pre_keys["removed_bwd"]] = list(
-                    saved_sheet_state.get("removed_bwd", [])
-                )
-                st.session_state[pre_keys["force_auto_peak_fwd"]] = False
-                st.session_state[pre_keys["force_auto_peak_bwd"]] = False
-
-                restore_key_map = {
-                    pre_keys["peak_slider_fwd"]:
-                        saved_sheet_state.get("peak_vg_fwd"),
-                    pre_keys["peak_slider_bwd"]:
-                        saved_sheet_state.get("peak_vg_rev"),
-                    (
-                        f"on_slider_fwd_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): saved_sheet_state.get("on_vg_fwd"),
-                    (
-                        f"on_slider_rev_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): saved_sheet_state.get("on_vg_rev"),
-                    (
-                        f"off_slider_fwd_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): saved_sheet_state.get("off_vg_fwd"),
-                    (
-                        f"off_slider_rev_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): saved_sheet_state.get("off_vg_rev"),
-                    pre_keys["ss_slider_fwd"]:
-                        saved_sheet_state.get("ss_vg_fwd"),
-                    pre_keys["ss_slider_bwd"]:
-                        saved_sheet_state.get("ss_vg_rev"),
-                    pre_keys["ss_range_start_fwd"]:
-                        saved_sheet_state.get("ss_range_start_fwd"),
-                    pre_keys["ss_range_end_fwd"]:
-                        saved_sheet_state.get("ss_range_end_fwd"),
-                    pre_keys["ss_range_start_bwd"]:
-                        saved_sheet_state.get("ss_range_start_rev"),
-                    pre_keys["ss_range_end_bwd"]:
-                        saved_sheet_state.get("ss_range_end_rev"),
-                    pre_keys["remove_slider_fwd"]:
-                        saved_sheet_state.get("mobility_remove_vg_fwd"),
-                    pre_keys["remove_slider_bwd"]:
-                        saved_sheet_state.get("mobility_remove_vg_rev"),
-                    pre_keys["log_remove_slider_fwd"]:
-                        saved_sheet_state.get("log_remove_vg_fwd"),
-                    pre_keys["log_remove_slider_bwd"]:
-                        saved_sheet_state.get("log_remove_vg_rev"),
-                    (
-                        f"direction_view_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): saved_sheet_state.get("direction"),
-                }
-                for restore_key, restore_value in restore_key_map.items():
-                    if restore_value is None:
-                        continue
-                    if restore_key.startswith("direction_view_"):
-                        st.session_state[restore_key] = str(restore_value)
-                    else:
-                        st.session_state[restore_key] = float(restore_value)
-
-                st.session_state[restore_token] = True
-
-            elif (
-                st.session_state.get("restore_pending")
-                and not st.session_state.get(restore_token, False)
-            ):
-                # Backward compatibility for logs saved before per-sheet state
-                # support. Those logs only contain the active sheet's state.
+            if st.session_state.get("restore_pending"):
                 st.session_state[pre_keys["removed_fwd"]] = list(
                     st.session_state.get("restored_removed_fwd", [])
                 )
@@ -2719,27 +2599,32 @@ with main_content:
                 st.session_state[pre_keys["force_auto_peak_fwd"]] = False
                 st.session_state[pre_keys["force_auto_peak_bwd"]] = False
 
-                legacy_restore_map = {
-                    pre_keys["peak_slider_fwd"]:
-                        st.session_state.get("restored_peak_vg_fwd"),
-                    pre_keys["peak_slider_bwd"]:
-                        st.session_state.get("restored_peak_vg_bwd"),
-                    (
-                        f"on_slider_fwd_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): st.session_state.get("restored_on_vg_fwd"),
-                    (
-                        f"on_slider_rev_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): st.session_state.get("restored_on_vg_rev"),
-                    (
-                        f"off_slider_fwd_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): st.session_state.get("restored_off_vg_fwd"),
-                    (
-                        f"off_slider_rev_{file_id}_{selected_sheet}_"
-                        f"{operating_mode}"
-                    ): st.session_state.get("restored_off_vg_rev"),
+                if st.session_state.get("restored_peak_vg_fwd") is not None:
+                    st.session_state[pre_keys["peak_slider_fwd"]] = float(
+                        st.session_state["restored_peak_vg_fwd"]
+                    )
+                if st.session_state.get("restored_peak_vg_bwd") is not None:
+                    st.session_state[pre_keys["peak_slider_bwd"]] = float(
+                        st.session_state["restored_peak_vg_bwd"]
+                    )
+                if st.session_state.get("restored_current_vg_fwd") is not None:
+                    st.session_state[pre_keys["current_slider_fwd"]] = float(
+                        st.session_state["restored_current_vg_fwd"]
+                    )
+                if st.session_state.get("restored_current_vg_bwd") is not None:
+                    st.session_state[pre_keys["current_slider_bwd"]] = float(
+                        st.session_state["restored_current_vg_bwd"]
+                    )
+
+                restore_key_map = {
+                    f"on_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_on_vg_fwd"),
+                    f"on_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_on_vg_rev"),
+                    f"off_slider_fwd_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_off_vg_fwd"),
+                    f"off_slider_rev_{file_id}_{selected_sheet}_{operating_mode}":
+                        st.session_state.get("restored_off_vg_rev"),
                     pre_keys["ss_slider_fwd"]:
                         st.session_state.get("restored_ss_vg_fwd"),
                     pre_keys["ss_slider_bwd"]:
@@ -2753,26 +2638,19 @@ with main_content:
                     pre_keys["ss_range_end_bwd"]:
                         st.session_state.get("restored_ss_range_end_rev"),
                     pre_keys["remove_slider_fwd"]:
-                        st.session_state.get(
-                            "restored_mobility_remove_vg_fwd"
-                        ),
+                        st.session_state.get("restored_mobility_remove_vg_fwd"),
                     pre_keys["remove_slider_bwd"]:
-                        st.session_state.get(
-                            "restored_mobility_remove_vg_rev"
-                        ),
+                        st.session_state.get("restored_mobility_remove_vg_rev"),
                     pre_keys["log_remove_slider_fwd"]:
                         st.session_state.get("restored_log_remove_vg_fwd"),
                     pre_keys["log_remove_slider_bwd"]:
                         st.session_state.get("restored_log_remove_vg_rev"),
                 }
-                for restore_key, restore_value in legacy_restore_map.items():
+                for restore_key, restore_value in restore_key_map.items():
                     if restore_value is not None:
                         st.session_state[restore_key] = float(restore_value)
 
-                st.session_state[restore_token] = True
-
-            # Keep the flag available while other worksheets are opened.
-            # Per-sheet restore_token prevents duplicate application.
+                st.session_state["restore_pending"] = False
 
             try:
                 res = analyze_sheet(df, file_id, selected_sheet)
@@ -3642,120 +3520,6 @@ with main_content:
                 return results
 
 
-            def collect_all_sheet_states():
-                """Persist every worksheet's independent analysis selections.
-
-                This includes point removals, mobility/ON/OFF/SS selections,
-                SS detection ranges, peak-elimination targets and direction.
-                """
-                states = {}
-
-                for sheet_name in target_sheets:
-                    sheet_keys = state_keys(
-                        file_id,
-                        sheet_name,
-                        operating_mode,
-                    )
-                    short_keys = {
-                        "on_vg_fwd": (
-                            f"on_slider_fwd_{file_id}_{sheet_name}_"
-                            f"{operating_mode}"
-                        ),
-                        "on_vg_rev": (
-                            f"on_slider_rev_{file_id}_{sheet_name}_"
-                            f"{operating_mode}"
-                        ),
-                        "off_vg_fwd": (
-                            f"off_slider_fwd_{file_id}_{sheet_name}_"
-                            f"{operating_mode}"
-                        ),
-                        "off_vg_rev": (
-                            f"off_slider_rev_{file_id}_{sheet_name}_"
-                            f"{operating_mode}"
-                        ),
-                        "direction": (
-                            f"direction_view_{file_id}_{sheet_name}_"
-                            f"{operating_mode}"
-                        ),
-                    }
-
-                    def value_or_none(key):
-                        value = st.session_state.get(key)
-                        if value is None:
-                            return None
-                        try:
-                            return float(value)
-                        except (TypeError, ValueError):
-                            return value
-
-                    states[sheet_name] = {
-                        "operating_mode": operating_mode,
-                        "removed_fwd": list(
-                            st.session_state.get(
-                                sheet_keys["removed_fwd"], []
-                            )
-                        ),
-                        "removed_bwd": list(
-                            st.session_state.get(
-                                sheet_keys["removed_bwd"], []
-                            )
-                        ),
-                        "peak_vg_fwd": value_or_none(
-                            sheet_keys["peak_slider_fwd"]
-                        ),
-                        "peak_vg_rev": value_or_none(
-                            sheet_keys["peak_slider_bwd"]
-                        ),
-                        "on_vg_fwd": value_or_none(
-                            short_keys["on_vg_fwd"]
-                        ),
-                        "on_vg_rev": value_or_none(
-                            short_keys["on_vg_rev"]
-                        ),
-                        "off_vg_fwd": value_or_none(
-                            short_keys["off_vg_fwd"]
-                        ),
-                        "off_vg_rev": value_or_none(
-                            short_keys["off_vg_rev"]
-                        ),
-                        "ss_vg_fwd": value_or_none(
-                            sheet_keys["ss_slider_fwd"]
-                        ),
-                        "ss_vg_rev": value_or_none(
-                            sheet_keys["ss_slider_bwd"]
-                        ),
-                        "ss_range_start_fwd": value_or_none(
-                            sheet_keys["ss_range_start_fwd"]
-                        ),
-                        "ss_range_end_fwd": value_or_none(
-                            sheet_keys["ss_range_end_fwd"]
-                        ),
-                        "ss_range_start_rev": value_or_none(
-                            sheet_keys["ss_range_start_bwd"]
-                        ),
-                        "ss_range_end_rev": value_or_none(
-                            sheet_keys["ss_range_end_bwd"]
-                        ),
-                        "mobility_remove_vg_fwd": value_or_none(
-                            sheet_keys["remove_slider_fwd"]
-                        ),
-                        "mobility_remove_vg_rev": value_or_none(
-                            sheet_keys["remove_slider_bwd"]
-                        ),
-                        "log_remove_vg_fwd": value_or_none(
-                            sheet_keys["log_remove_slider_fwd"]
-                        ),
-                        "log_remove_vg_rev": value_or_none(
-                            sheet_keys["log_remove_slider_bwd"]
-                        ),
-                        "direction": st.session_state.get(
-                            short_keys["direction"], "Forward"
-                        ),
-                    }
-
-                return states
-
-
             def build_current_log_entry(log_id=None):
                 if current_project:
                     current_settings = ensure_project_device_settings(
@@ -3781,9 +3545,6 @@ with main_content:
                         "active_file_name", "restored.xlsx"
                     ),
                 )
-
-                all_sheet_parameters = collect_all_sheet_parameters()
-                all_sheet_states = collect_all_sheet_states()
 
                 return {
                     "_log_id": log_id or str(uuid.uuid4()),
@@ -3830,8 +3591,7 @@ with main_content:
                     ),
                     "Saved at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "File": active_analysis_file_name,
-                    "_all_sheet_parameters": all_sheet_parameters,
-                    "_sheet_states": all_sheet_states,
+                    "_all_sheet_parameters": collect_all_sheet_parameters(),
                     "Sheet": selected_sheet,
                     "Operating mode": operating_mode,
                     "Width (μm)": float(W),
