@@ -1,5 +1,6 @@
 
 import io
+import json
 import re
 import uuid
 import pickle
@@ -1106,6 +1107,9 @@ def restore_log_state(record, folder_name=None):
     )
     st.session_state["restored_sheet_states"] = dict(
         record.get("_sheet_states", {})
+    )
+    st.session_state["restored_plot_snapshots"] = dict(
+        record.get("_plot_snapshots", {})
     )
     st.session_state["restored_state_log_id"] = record.get("_log_id")
     st.session_state["active_file_name"] = record.get("File", "restored.xlsx")
@@ -3778,6 +3782,36 @@ with main_content:
                 return all_states
 
 
+            def collect_all_plot_snapshots():
+                """Return saved Plotly JSON for every visited worksheet.
+
+                A worksheet snapshot contains curves, markers, tangent lines,
+                selected direction styling, axis ranges and annotations.
+                Unvisited worksheets are reconstructed from their saved
+                analysis state when opened.
+                """
+                snapshots = {}
+                for sheet_name in target_sheets:
+                    snapshot_key = (
+                        f"plot_snapshot_{file_id}_{sheet_name}_"
+                        f"{operating_mode}"
+                    )
+                    snapshot = st.session_state.get(snapshot_key)
+                    if snapshot:
+                        snapshots[sheet_name] = snapshot
+
+                # Preserve snapshots from a previously opened log even when a
+                # sheet was not revisited during the current editing session.
+                restored = st.session_state.get(
+                    "restored_plot_snapshots", {}
+                )
+                if isinstance(restored, dict):
+                    for sheet_name, snapshot in restored.items():
+                        snapshots.setdefault(sheet_name, snapshot)
+
+                return snapshots
+
+
             def build_current_log_entry(log_id=None):
                 if current_project:
                     current_settings = ensure_project_device_settings(
@@ -3806,6 +3840,7 @@ with main_content:
 
                 all_sheet_parameters = collect_all_sheet_parameters()
                 all_sheet_states = collect_all_sheet_states()
+                all_plot_snapshots = collect_all_plot_snapshots()
 
                 return {
                     "_log_id": log_id or str(uuid.uuid4()),
@@ -3854,6 +3889,7 @@ with main_content:
                     "File": active_analysis_file_name,
                     "_all_sheet_parameters": all_sheet_parameters,
                     "_sheet_states": all_sheet_states,
+                    "_plot_snapshots": all_plot_snapshots,
                     "Sheet": selected_sheet,
                     "Operating mode": operating_mode,
                     "Width (μm)": float(W),
@@ -4496,7 +4532,49 @@ with main_content:
                 margin=dict(t=34, b=8, l=32, r=8),
                 showlegend=False,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            # Save the exact interactive Plotly figure for this worksheet.
+            plot_snapshot_key = (
+                f"plot_snapshot_{file_id}_{selected_sheet}_"
+                f"{operating_mode}"
+            )
+            current_plot_json = fig.to_json()
+            st.session_state[plot_snapshot_key] = current_plot_json
+
+            # On the first render after opening a saved project log, display
+            # the saved figure snapshot exactly as it looked at Save time.
+            restored_plot_snapshots = st.session_state.get(
+                "restored_plot_snapshots", {}
+            )
+            plot_restore_token = (
+                f"plot_snapshot_applied_"
+                f"{st.session_state.get('restored_state_log_id', 'none')}_"
+                f"{file_id}_{selected_sheet}_{operating_mode}"
+            )
+            saved_plot_json = (
+                restored_plot_snapshots.get(selected_sheet)
+                if isinstance(restored_plot_snapshots, dict)
+                else None
+            )
+
+            figure_to_display = fig
+            if (
+                saved_plot_json
+                and not st.session_state.get(
+                    plot_restore_token, False
+                )
+            ):
+                try:
+                    figure_to_display = go.Figure(
+                        json.loads(saved_plot_json)
+                    )
+                    st.session_state[plot_restore_token] = True
+                except Exception:
+                    figure_to_display = fig
+
+            st.plotly_chart(
+                figure_to_display,
+                use_container_width=True,
+            )
 
             def render_removal_control(state, container, removed_key, remove_key, force_key):
                 with container:
