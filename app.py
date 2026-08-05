@@ -920,7 +920,6 @@ EXPORT_COLUMNS = [
     "Field-effect mobility",
     "threshold voltage (V)",
     "subthreshold swing (mV/dec)",
-    "hysteresis (V)",
 ]
 
 
@@ -970,9 +969,6 @@ def log_dataframe(folder_name):
                 "Forward SS (mV/dec)": record.get(
                     "Forward SS (mV/dec)", np.nan
                 ),
-                "Hysteresis (V)": record.get(
-                    "Hysteresis (V)", np.nan
-                ),
                 "_sheet_order": 0,
             }]
 
@@ -1013,10 +1009,6 @@ def log_dataframe(folder_name):
                 ),
                 "subthreshold swing (mV/dec)": sheet_row.get(
                     "Forward SS (mV/dec)", np.nan
-                ),
-                "hysteresis (V)": sheet_row.get(
-                    "Hysteresis (V)",
-                    record.get("Hysteresis (V)", np.nan),
                 ),
                 "_record_order": record_order,
                 "_sheet_order": int(
@@ -2971,6 +2963,39 @@ with main_content:
                 peak_vg = float(st.session_state[peak_key])
                 peak_idx = int((sweep_df["GateV"] - peak_vg).abs().idxmin())
 
+                vg_for_mu_slope = pd.to_numeric(
+                    sweep_df["GateV"],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                mu_for_slope = np.asarray(
+                    mu_curve,
+                    dtype=float,
+                )
+                with np.errstate(
+                    divide="ignore",
+                    invalid="ignore",
+                ):
+                    mobility_slope_abs_curve = np.abs(
+                        np.gradient(
+                            mu_for_slope,
+                            vg_for_mu_slope,
+                        )
+                    )
+                mobility_slope_abs_curve[
+                    ~np.isfinite(mobility_slope_abs_curve)
+                ] = np.nan
+                mobility_slope_abs = (
+                    float(mobility_slope_abs_curve[peak_idx])
+                    if (
+                        0 <= peak_idx
+                        < len(mobility_slope_abs_curve)
+                        and np.isfinite(
+                            mobility_slope_abs_curve[peak_idx]
+                        )
+                    )
+                    else np.nan
+                )
+
                 vth_idx = peak_idx
                 vth_vg = float(sweep_df["GateV"].iloc[vth_idx])
                 vth_value = vth_at_index(
@@ -3023,6 +3048,7 @@ with main_content:
                     "peak_idx": peak_idx,
                     "peak_vg": float(sweep_df["GateV"].iloc[peak_idx]),
                     "mobility": float(mu_curve[peak_idx]),
+                    "mobility_slope_abs": mobility_slope_abs,
                     "vth_key": vth_key,
                     "vth_idx": vth_idx,
                     "vth_vg": float(sweep_df["GateV"].iloc[vth_idx]),
@@ -3862,7 +3888,49 @@ with main_content:
                     ),
                 )
             with top_row_2[3]:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+                f_slope_text = (
+                    f"{f_state['mobility_slope_abs']:.2e}"
+                    if np.isfinite(
+                        f_state["mobility_slope_abs"]
+                    )
+                    else "N/A"
+                )
+                r_slope_text = (
+                    f"{r_state['mobility_slope_abs']:.2e}"
+                    if np.isfinite(
+                        r_state["mobility_slope_abs"]
+                    )
+                    else "N/A"
+                )
+                st.markdown(
+                    "<div class='top-param-card'>"
+                    "<div class='top-param-title'>"
+                    "|dμ/dV<sub>G</sub>|"
+                    "</div>"
+                    "<div style='display:flex;gap:12px;"
+                    "align-items:flex-start;'>"
+                    "<div style='flex:1;min-width:0;'>"
+                    "<div style='font-size:12px;font-weight:800;"
+                    "color:#2E60AB;margin-bottom:2px;'>Forward</div>"
+                    f"<div class='top-param-value' "
+                    f"style='color:#2E60AB;font-size:20px !important;'>"
+                    f"{f_slope_text}</div>"
+                    "</div>"
+                    "<div style='flex:1;min-width:0;"
+                    "border-left:1px solid rgba(120,120,120,.28);"
+                    "padding-left:10px;'>"
+                    "<div style='font-size:12px;font-weight:800;"
+                    "color:#D94B45;margin-bottom:2px;'>Reverse</div>"
+                    f"<div class='top-param-value' "
+                    f"style='color:#D94B45;font-size:20px !important;'>"
+                    f"{r_slope_text}</div>"
+                    "</div>"
+                    "</div>"
+                    "<div style='font-size:11px;color:#666;"
+                    "margin-top:5px;'>cm² V⁻² s⁻¹</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
             # ====================================================
             # Four horizontal plots
