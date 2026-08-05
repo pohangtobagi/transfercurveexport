@@ -3888,48 +3888,17 @@ with main_content:
                     ),
                 )
             with top_row_2[3]:
-                f_slope_text = (
-                    f"{f_state['mobility_slope_abs']:.2e}"
-                    if np.isfinite(
-                        f_state["mobility_slope_abs"]
-                    )
-                    else "N/A"
+                active_slope_value = active_state.get(
+                    "mobility_slope_abs", np.nan
                 )
-                r_slope_text = (
-                    f"{r_state['mobility_slope_abs']:.2e}"
-                    if np.isfinite(
-                        r_state["mobility_slope_abs"]
-                    )
-                    else "N/A"
-                )
-                st.markdown(
-                    "<div class='top-param-card'>"
-                    "<div class='top-param-title'>"
-                    "|dμ/dV<sub>G</sub>|"
-                    "</div>"
-                    "<div style='display:flex;gap:12px;"
-                    "align-items:flex-start;'>"
-                    "<div style='flex:1;min-width:0;'>"
-                    "<div style='font-size:12px;font-weight:800;"
-                    "color:#2E60AB;margin-bottom:2px;'>Forward</div>"
-                    f"<div class='top-param-value' "
-                    f"style='color:#2E60AB;font-size:20px !important;'>"
-                    f"{f_slope_text}</div>"
-                    "</div>"
-                    "<div style='flex:1;min-width:0;"
-                    "border-left:1px solid rgba(120,120,120,.28);"
-                    "padding-left:10px;'>"
-                    "<div style='font-size:12px;font-weight:800;"
-                    "color:#D94B45;margin-bottom:2px;'>Reverse</div>"
-                    f"<div class='top-param-value' "
-                    f"style='color:#D94B45;font-size:20px !important;'>"
-                    f"{r_slope_text}</div>"
-                    "</div>"
-                    "</div>"
-                    "<div style='font-size:11px;color:#666;"
-                    "margin-top:5px;'>cm² V⁻² s⁻¹</div>"
-                    "</div>",
-                    unsafe_allow_html=True,
+                render_top_parameter(
+                    "|dμ/dV<sub>G</sub>|",
+                    (
+                        f"{active_slope_value:.2e} "
+                        "cm² V⁻² s⁻¹"
+                        if np.isfinite(active_slope_value)
+                        else "N/A"
+                    ),
                 )
 
             # ====================================================
