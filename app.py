@@ -354,23 +354,75 @@ def _default_persistent_state():
 
 @st.cache_resource(show_spinner=False)
 def _build_supabase_client(url, key):
+    """Build one cached Supabase client.
+
+    Important:
+    - URL must be the HTTPS Project URL, not a database hostname.
+    - Strip accidental whitespace/newlines copied into Streamlit secrets.
+    """
     if create_client is None:
         return None
+
+    url = str(url).strip().rstrip("/")
+    key = str(key).strip()
+
+    if not url.startswith(("https://", "http://")):
+        raise ValueError(
+            "SUPABASE_URL 형식이 잘못되었습니다. "
+            "예: https://<project-ref>.supabase.co"
+        )
+
     return create_client(url, key)
 
 
 def get_supabase_client():
     """Return one cached Supabase client for the whole app process."""
     if create_client is None:
+        st.session_state["persistence_warning"] = (
+            "supabase 패키지가 설치되어 있지 않습니다. "
+            "requirements.txt에 supabase를 추가하세요."
+        )
         return None
 
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+        url = str(st.secrets["SUPABASE_URL"]).strip()
+        key = str(st.secrets["SUPABASE_SERVICE_ROLE_KEY"]).strip()
     except Exception:
+        # No remote persistence configured: silently use local fallback.
         return None
 
-    return _build_supabase_client(url, key)
+    try:
+        return _build_supabase_client(url, key)
+    except Exception as exc:
+        st.session_state["persistence_warning"] = (
+            f"Supabase 클라이언트 생성 실패: {exc}"
+        )
+        return None
+
+
+def _is_supabase_dns_error(exc):
+    """Return True for DNS/name-resolution failures."""
+    message = str(exc).lower()
+    dns_tokens = (
+        "name or service not known",
+        "temporary failure in name resolution",
+        "nodename nor servname provided",
+        "getaddrinfo failed",
+        "errno -2",
+    )
+    return any(token in message for token in dns_tokens)
+
+
+def _supabase_error_message(action, exc):
+    """Human-friendly persistence error without crashing the analysis app."""
+    if _is_supabase_dns_error(exc):
+        return (
+            f"Supabase {action} 실패: Supabase 호스트의 DNS를 찾지 못했습니다. "
+            "Streamlit secrets의 SUPABASE_URL이 "
+            "'https://<project-ref>.supabase.co' 형식인지 확인하세요. "
+            "현재는 로컬 저장소로 fallback합니다."
+        )
+    return f"Supabase {action} 실패: {exc}"
 
 
 def serialize_persistent_state(data):
@@ -520,7 +572,7 @@ def load_projects_state():
                 )
         except Exception as exc:
             st.session_state["persistence_warning"] = (
-                f"Supabase 불러오기 실패: {exc}"
+                _supabase_error_message("불러오기", exc)
             )
 
     # Local fallback is useful for local development, but Streamlit Cloud
@@ -583,7 +635,7 @@ def save_projects_state():
             return
         except Exception as exc:
             st.session_state["persistence_warning"] = (
-                f"Supabase 저장 실패: {exc}"
+                _supabase_error_message("저장", exc)
             )
 
     # Local fallback for development only.
