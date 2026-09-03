@@ -4231,6 +4231,11 @@ with main_content:
                 "Linear Mobility" if operating_mode == "Linear"
                 else "Saturation Mobility"
             )
+            graph_vth_title = (
+                "Transfer (Linear)"
+                if operating_mode == "Linear"
+                else "√|Id| vs Gate Voltage"
+            )
             fig = make_subplots(
                 rows=1,
                 cols=4,
@@ -4238,7 +4243,7 @@ with main_content:
                     "Transfer (Log)",
                     "Subthreshold Swing",
                     graph_mobility_title,
-                    "Transfer (Linear)",
+                    graph_vth_title,
                 ),
                 horizontal_spacing=0.085,
             )
@@ -4255,7 +4260,27 @@ with main_content:
                 "solid" if selected_direction == "Reverse" else "dash"
             )
 
-            for col_num in (1, 4):
+            # Transfer (Log) always uses |Id|. The 4th plot depends on mode.
+            fig.add_trace(
+                go.Scatter(
+                    x=vg_fwd,
+                    y=np.abs(id_fwd),
+                    line=dict(color="blue", dash=fwd_dash, width=2),
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=vg_bwd,
+                    y=np.abs(id_bwd),
+                    line=dict(color="red", dash=rev_dash, width=2),
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+
+            if operating_mode == "Linear":
                 fig.add_trace(
                     go.Scatter(
                         x=vg_fwd,
@@ -4263,7 +4288,7 @@ with main_content:
                         line=dict(color="blue", dash=fwd_dash, width=2),
                         showlegend=False,
                     ),
-                    row=1, col=col_num,
+                    row=1, col=4,
                 )
                 fig.add_trace(
                     go.Scatter(
@@ -4272,7 +4297,26 @@ with main_content:
                         line=dict(color="red", dash=rev_dash, width=2),
                         showlegend=False,
                     ),
-                    row=1, col=col_num,
+                    row=1, col=4,
+                )
+            else:
+                fig.add_trace(
+                    go.Scatter(
+                        x=vg_fwd,
+                        y=np.sqrt(np.abs(id_fwd)),
+                        line=dict(color="blue", dash=fwd_dash, width=2),
+                        showlegend=False,
+                    ),
+                    row=1, col=4,
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=vg_bwd,
+                        y=np.sqrt(np.abs(id_bwd)),
+                        line=dict(color="red", dash=rev_dash, width=2),
+                        showlegend=False,
+                    ),
+                    row=1, col=4,
                 )
 
             if "GateI" in df.columns:
@@ -4283,7 +4327,8 @@ with main_content:
                 ig_b = gate_i.iloc[
                     bwd["__source_index"].astype(int).to_numpy()
                 ].reset_index(drop=True)
-                for col_num in (1, 4):
+                gate_plot_columns = (1, 4) if operating_mode == "Linear" else (1,)
+                for col_num in gate_plot_columns:
                     fig.add_trace(
                         go.Scatter(
                             x=vg_fwd,
@@ -4467,27 +4512,40 @@ with main_content:
                         col=2,
                     )
 
-            # Transfer (Linear): restore tangent and selected point.
+            # 4th plot: Vth extrapolation basis.
+            # Linear mode      -> |Id| vs Vg
+            # Saturation mode  -> √|Id| vs Vg
             for tangent_state in (f_state, r_state):
                 x_all = np.asarray(
                     tangent_state["df"]["GateV"],
                     dtype=float,
                 )
-                y_all = np.abs(
-                    np.asarray(
-                        tangent_state["df"]["DrainI_active"],
-                        dtype=float,
-                    )
+                raw_current = np.asarray(
+                    tangent_state["df"]["DrainI_active"],
+                    dtype=float,
                 )
+                if operating_mode == "Saturation":
+                    y_all = np.sqrt(np.abs(raw_current))
+                else:
+                    y_all = np.abs(raw_current)
+
                 tangent_idx = tangent_state["vth_idx"]
-                slope_abs = np.gradient(y_all, x_all)[tangent_idx]
+
+                # Use the exact derivative basis already used by Vth extraction.
+                slope_value = float(
+                    tangent_state["gm_curve"][tangent_idx]
+                )
+                if not np.isfinite(slope_value):
+                    slope_value = np.gradient(y_all, x_all)[tangent_idx]
+
                 tangent_y = (
                     y_all[tangent_idx]
-                    + slope_abs * (x_all - x_all[tangent_idx])
+                    + slope_value * (x_all - x_all[tangent_idx])
                 )
                 valid_tangent = (
                     np.isfinite(tangent_y) & (tangent_y >= 0)
                 )
+
                 if valid_tangent.sum() >= 2:
                     fig.add_trace(
                         go.Scatter(
@@ -4513,18 +4571,12 @@ with main_content:
                         row=1,
                         col=4,
                     )
+
+                # Selected measured point used for the tangent.
                 fig.add_trace(
                     go.Scatter(
                         x=[tangent_state["vth_vg"]],
-                        y=[
-                            abs(
-                                float(
-                                    tangent_state["df"][
-                                        "DrainI_active"
-                                    ].iloc[tangent_idx]
-                                )
-                            )
-                        ],
+                        y=[float(y_all[tangent_idx])],
                         mode="markers",
                         marker=dict(
                             size=9,
@@ -4537,6 +4589,21 @@ with main_content:
                     row=1,
                     col=4,
                 )
+
+                # Show the extracted x-intercept (Vth) explicitly.
+                if np.isfinite(tangent_state["vth"]):
+                    fig.add_vline(
+                        x=float(tangent_state["vth"]),
+                        line_dash="dashdot",
+                        line_width=(
+                            1.6
+                            if tangent_state["name"] == selected_direction
+                            else 1.0
+                        ),
+                        line_color=tangent_state["color"],
+                        row=1,
+                        col=4,
+                    )
 
             common_axis = dict(
                 ticks="outside", showline=True, mirror=True, showgrid=True,
@@ -4569,15 +4636,26 @@ with main_content:
                 col=3,
                 **common_axis,
             )
-            fig.update_yaxes(
-                title_text="Current (A)",
-                tickformat=".1e",
-                exponentformat="E",
-                showexponent="all",
-                row=1,
-                col=4,
-                **common_axis,
-            )
+            if operating_mode == "Saturation":
+                fig.update_yaxes(
+                    title_text="√|Id| (A<sup>1/2</sup>)",
+                    tickformat=".1e",
+                    exponentformat="E",
+                    showexponent="all",
+                    row=1,
+                    col=4,
+                    **common_axis,
+                )
+            else:
+                fig.update_yaxes(
+                    title_text="Current (A)",
+                    tickformat=".1e",
+                    exponentformat="E",
+                    showexponent="all",
+                    row=1,
+                    col=4,
+                    **common_axis,
+                )
             fig.update_layout(
                 height=330,
                 template="plotly_white",
@@ -4972,7 +5050,7 @@ with main_content:
                         state_key=active_state["remove_key"],
                     )
 
-            # Column 4: Transfer Linear has no independent slider.
+            # Column 4: Vth extrapolation plot has no independent slider.
             with control_columns[3]:
                 st.markdown(
                     "<div class='control-placeholder'></div>",
