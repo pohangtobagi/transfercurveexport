@@ -4512,59 +4512,148 @@ with main_content:
                         col=2,
                     )
 
-            # 4th plot: Vth extrapolation basis.
-            # Linear mode      -> |Id| vs Vg
-            # Saturation mode  -> √|Id| vs Vg
-            for tangent_state in (f_state, r_state):
-                x_all = np.asarray(
-                    tangent_state["df"]["GateV"],
-                    dtype=float,
-                )
-                raw_current = np.asarray(
-                    tangent_state["df"]["DrainI_active"],
-                    dtype=float,
-                )
-                if operating_mode == "Saturation":
-                    y_all = np.sqrt(np.abs(raw_current))
-                else:
-                    y_all = np.abs(raw_current)
-
-                tangent_idx = tangent_state["vth_idx"]
-
-                # Use the exact derivative basis already used by Vth extraction.
-                slope_value = float(
-                    tangent_state["gm_curve"][tangent_idx]
-                )
-                if not np.isfinite(slope_value):
-                    slope_value = np.gradient(y_all, x_all)[tangent_idx]
-
-                tangent_y = (
-                    y_all[tangent_idx]
-                    + slope_value * (x_all - x_all[tangent_idx])
-                )
-                valid_tangent = (
-                    np.isfinite(tangent_y) & (tangent_y >= 0)
-                )
-
-                if valid_tangent.sum() >= 2:
+            # 4th plot: keep Linear mode exactly as before.
+            if operating_mode == "Linear":
+                # Transfer (Linear): original |Id|-Vg tangent logic.
+                for tangent_state in (f_state, r_state):
+                    x_all = np.asarray(
+                        tangent_state["df"]["GateV"],
+                        dtype=float,
+                    )
+                    y_all = np.abs(
+                        np.asarray(
+                            tangent_state["df"]["DrainI_active"],
+                            dtype=float,
+                        )
+                    )
+                    tangent_idx = tangent_state["vth_idx"]
+                    slope_abs = np.gradient(y_all, x_all)[tangent_idx]
+                    tangent_y = (
+                        y_all[tangent_idx]
+                        + slope_abs * (x_all - x_all[tangent_idx])
+                    )
+                    valid_tangent = (
+                        np.isfinite(tangent_y) & (tangent_y >= 0)
+                    )
+                    if valid_tangent.sum() >= 2:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x_all[valid_tangent],
+                                y=tangent_y[valid_tangent],
+                                line=dict(
+                                    color=tangent_state["color"],
+                                    dash=(
+                                        "dot"
+                                        if tangent_state["name"]
+                                        == selected_direction
+                                        else "dash"
+                                    ),
+                                    width=(
+                                        1.8
+                                        if tangent_state["name"]
+                                        == selected_direction
+                                        else 1.2
+                                    ),
+                                ),
+                                showlegend=False,
+                            ),
+                            row=1,
+                            col=4,
+                        )
                     fig.add_trace(
                         go.Scatter(
-                            x=x_all[valid_tangent],
-                            y=tangent_y[valid_tangent],
-                            line=dict(
+                            x=[tangent_state["vth_vg"]],
+                            y=[
+                                abs(
+                                    float(
+                                        tangent_state["df"][
+                                            "DrainI_active"
+                                        ].iloc[tangent_idx]
+                                    )
+                                )
+                            ],
+                            mode="markers",
+                            marker=dict(
+                                size=9,
                                 color=tangent_state["color"],
-                                dash=(
-                                    "dot"
-                                    if tangent_state["name"]
-                                    == selected_direction
-                                    else "dash"
+                                symbol="circle",
+                                line=dict(width=1, color="white"),
+                            ),
+                            showlegend=False,
+                        ),
+                        row=1,
+                        col=4,
+                    )
+            else:
+                # Saturation mode: √|Id|-Vg with the same derivative
+                # basis used in saturation mobility/Vth extraction.
+                for tangent_state in (f_state, r_state):
+                    x_all = np.asarray(
+                        tangent_state["df"]["GateV"],
+                        dtype=float,
+                    )
+                    raw_current = np.asarray(
+                        tangent_state["df"]["DrainI_active"],
+                        dtype=float,
+                    )
+                    y_all = np.sqrt(np.abs(raw_current))
+                    tangent_idx = tangent_state["vth_idx"]
+
+                    slope_value = float(
+                        tangent_state["gm_curve"][tangent_idx]
+                    )
+                    if not np.isfinite(slope_value):
+                        slope_value = np.gradient(
+                            y_all, x_all
+                        )[tangent_idx]
+
+                    tangent_y = (
+                        y_all[tangent_idx]
+                        + slope_value * (
+                            x_all - x_all[tangent_idx]
+                        )
+                    )
+                    valid_tangent = (
+                        np.isfinite(tangent_y)
+                        & (tangent_y >= 0)
+                    )
+
+                    if valid_tangent.sum() >= 2:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x_all[valid_tangent],
+                                y=tangent_y[valid_tangent],
+                                line=dict(
+                                    color=tangent_state["color"],
+                                    dash=(
+                                        "dot"
+                                        if tangent_state["name"]
+                                        == selected_direction
+                                        else "dash"
+                                    ),
+                                    width=(
+                                        1.8
+                                        if tangent_state["name"]
+                                        == selected_direction
+                                        else 1.2
+                                    ),
                                 ),
-                                width=(
-                                    1.8
-                                    if tangent_state["name"]
-                                    == selected_direction
-                                    else 1.2
-                                ),
+                                showlegend=False,
+                            ),
+                            row=1,
+                            col=4,
+                        )
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[tangent_state["vth_vg"]],
+                            y=[float(y_all[tangent_idx])],
+                            mode="markers",
+                            marker=dict(
+                                size=9,
+                                color=tangent_state["color"],
+                                symbol="circle",
+                                line=dict(width=1, color="white"),
                             ),
                             showlegend=False,
                         ),
@@ -4572,38 +4661,20 @@ with main_content:
                         col=4,
                     )
 
-                # Selected measured point used for the tangent.
-                fig.add_trace(
-                    go.Scatter(
-                        x=[tangent_state["vth_vg"]],
-                        y=[float(y_all[tangent_idx])],
-                        mode="markers",
-                        marker=dict(
-                            size=9,
-                            color=tangent_state["color"],
-                            symbol="circle",
-                            line=dict(width=1, color="white"),
-                        ),
-                        showlegend=False,
-                    ),
-                    row=1,
-                    col=4,
-                )
-
-                # Show the extracted x-intercept (Vth) explicitly.
-                if np.isfinite(tangent_state["vth"]):
-                    fig.add_vline(
-                        x=float(tangent_state["vth"]),
-                        line_dash="dashdot",
-                        line_width=(
-                            1.6
-                            if tangent_state["name"] == selected_direction
-                            else 1.0
-                        ),
-                        line_color=tangent_state["color"],
-                        row=1,
-                        col=4,
-                    )
+                    if np.isfinite(tangent_state["vth"]):
+                        fig.add_vline(
+                            x=float(tangent_state["vth"]),
+                            line_dash="dashdot",
+                            line_width=(
+                                1.6
+                                if tangent_state["name"]
+                                == selected_direction
+                                else 1.0
+                            ),
+                            line_color=tangent_state["color"],
+                            row=1,
+                            col=4,
+                        )
 
             common_axis = dict(
                 ticks="outside", showline=True, mirror=True, showgrid=True,
